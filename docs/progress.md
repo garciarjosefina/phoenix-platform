@@ -44,13 +44,22 @@
 
 ---
 
-## Próximo hito
+## Fase 3 — Execution Gateway
 
-**Fase 3 — por definir**
+### Hitos planificados
 
-El núcleo está congelado en `v0.1.0`. La siguiente fase probablemente involucra:
-- Integración con Bybit (cliente HTTP)
-- Lógica de bots (señales → órdenes)
-- Despliegue en Railway
+| Hito | Descripción | Commit |
+|------|-------------|--------|
+| 3.1 | Inicializar paquete `execution_gateway` (`__init__.py` + test de importación) | — |
 
-> Actualizar esta sección cuando se definan los próximos hitos.
+### Próximo hito
+
+**3.1 — Inicializar el paquete `execution_gateway`**
+
+Crear la estructura mínima del Execution Gateway como paquete Python independiente dentro de `platform/`. Sin conexión a Bybit, sin cliente HTTP, sin autenticación. Mismo patrón que Hito 2.1.
+
+Archivos a crear:
+- `platform/execution_gateway/__init__.py` — `__version__ = "0.1.0"`
+- `tests/test_execution_gateway_import.py` — importación y versión
+
+Commit planificado: `feat: initialize execution gateway package`
