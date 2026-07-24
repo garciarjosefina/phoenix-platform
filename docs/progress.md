@@ -50,7 +50,7 @@
 
 | Hito | Descripción | Commit |
 |------|-------------|--------|
-| 3.1 | Inicializar paquete `execution_gateway` (`__init__.py` + test de importación) | — |
+| 3.1 | Inicializar paquete `execution_gateway` (`__init__.py` + test de importación) | `(próximo commit)` |
 
 ### Próximo hito
 
