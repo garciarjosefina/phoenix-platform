@@ -25,6 +25,10 @@ def event_id() -> str:
     return _make_id("event")
 
 
+def portfolio_id() -> str:
+    return _make_id("portfolio")
+
+
 def is_valid(value: str, prefix: str) -> bool:
     if not isinstance(value, str):
         return False
