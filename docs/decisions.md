@@ -74,6 +74,15 @@
 
 ---
 
+## D-010 — Configuración por inyección, no por lectura automática
+
+**Fecha:** 2026-07-23
+**Decisión:** Los módulos de `execution_gateway` no leen variables de entorno ni archivos en tiempo de importación. La configuración se inyecta explícitamente al construir instancias (`GatewayConfig(...)`).
+**Razón:** Evitar efectos secundarios al importar. Facilita testing determinístico y despliegues en múltiples entornos sin cambiar el código.
+**Alcance:** Todo componente dentro de `execution_gateway`. Las credenciales y variables de entorno se inyectarán en una capa superior cuando corresponda.
+
+---
+
 ## D-009 — `docs/` como fuente de verdad del proyecto
 
 **Fecha:** 2026-07-23

@@ -50,16 +50,9 @@
 
 | Hito | Descripción | Commit |
 |------|-------------|--------|
-| 3.1 | Inicializar paquete `execution_gateway` (`__init__.py` + test de importación) | `(próximo commit)` |
+| 3.1 | Inicializar paquete `execution_gateway` (`__init__.py` + test de importación) | `fcb8efb` |
+| 3.2 | Configuración del gateway (`GatewayConfig`) — environment, dry_run, timeout | `(próximo commit)` |
 
 ### Próximo hito
 
-**3.1 — Inicializar el paquete `execution_gateway`**
-
-Crear la estructura mínima del Execution Gateway como paquete Python independiente dentro de `platform/`. Sin conexión a Bybit, sin cliente HTTP, sin autenticación. Mismo patrón que Hito 2.1.
-
-Archivos a crear:
-- `platform/execution_gateway/__init__.py` — `__version__ = "0.1.0"`
-- `tests/test_execution_gateway_import.py` — importación y versión
-
-Commit planificado: `feat: initialize execution gateway package`
+Por definir.
