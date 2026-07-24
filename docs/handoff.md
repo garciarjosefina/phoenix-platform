@@ -1,6 +1,32 @@
 # Phoenix Platform — Handoff para nueva sesión
 
-> Leer este archivo primero al retomar el proyecto.
+> Leer este archivo primero al retomar el proyecto. Luego leer `progress.md` y `decisions.md`.
+
+---
+
+## Fuente de verdad del proyecto
+
+Estos cuatro archivos son la fuente de verdad. Leerlos al inicio de cada sesión:
+
+1. `docs/handoff.md` — contexto general y protocolo de trabajo
+2. `docs/progress.md` — estado actual e hitos completados
+3. `docs/decisions.md` — decisiones de arquitectura tomadas
+4. `docs/backlog.md` — ideas registradas, pendientes de decisión
+
+**Regla fundamental:** Si la documentación y la memoria del chat se contradicen, prevalece siempre la documentación del repositorio.
+
+---
+
+## Protocolo de trabajo
+
+### Al iniciar una sesión
+1. Leer `docs/handoff.md`
+2. Leer `docs/progress.md`
+3. Leer `docs/decisions.md`
+
+### Al finalizar un hito
+1. Actualizar la documentación únicamente si hubo cambios.
+2. Hacer commit y push.
 
 ---
 
@@ -83,6 +109,7 @@ La Fase 3 no está definida todavía. Los candidatos naturales son:
 ```
 phoenix-platform/
 ├── docs/
+│   ├── backlog.md      ← ideas pendientes de decisión
 │   ├── decisions.md    ← decisiones de arquitectura
 │   ├── handoff.md      ← este archivo
 │   └── progress.md     ← estado e hitos
