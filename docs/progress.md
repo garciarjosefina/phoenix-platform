@@ -3,7 +3,7 @@
 ## Estado actual
 
 **Versión:** `v0.1.0` (tag en `main`)
-**Tests:** 142 passing
+**Tests:** 196 passing
 **Rama activa:** `main`
 **Última actualización:** 2026-07-23
 
@@ -51,7 +51,8 @@
 | Hito | Descripción | Commit |
 |------|-------------|--------|
 | 3.1 | Inicializar paquete `execution_gateway` (`__init__.py` + test de importación) | `fcb8efb` |
-| 3.2 | Configuración del gateway (`GatewayConfig`) — environment, dry_run, timeout | `(próximo commit)` |
+| 3.2 | Configuración del gateway (`GatewayConfig`) — environment, dry_run, timeout | `(ver commit 3.2)` |
+| 3.3 | Contratos de ejecución (`ExecutionRequest`, `ExecutionResult`) — 37 tests | `(próximo commit)` |
 
 ### Próximo hito
 
