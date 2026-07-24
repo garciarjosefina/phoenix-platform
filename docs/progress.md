@@ -36,6 +36,14 @@
 
 ---
 
+## Cierres de componentes
+
+| Componente | Versión | Estado | Documento |
+|------------|---------|--------|-----------|
+| Phoenix Core | `v0.1.0` | ✅ Completado | [`docs/components/phoenix-core.md`](components/phoenix-core.md) |
+
+---
+
 ## Próximo hito
 
 **Fase 3 — por definir**

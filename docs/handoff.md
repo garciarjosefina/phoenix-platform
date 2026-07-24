@@ -28,6 +28,14 @@ Estos cuatro archivos son la fuente de verdad. Leerlos al inicio de cada sesión
 1. Actualizar la documentación únicamente si hubo cambios.
 2. Hacer commit y push.
 
+### Al completar un componente grande
+Antes de comenzar el siguiente componente, crear obligatoriamente:
+`docs/components/<nombre-del-componente>.md`
+
+Componentes grandes: Phoenix Core, Execution Gateway, Auditor, Market Regime Engine, Portfolio Orchestrator, Bot SDK, Dashboard, cada bot aprobado.
+
+El cierre debe incluir: nombre/versión, estado, objetivo, funcionalidades, interfaces, archivos, tests, decisiones, limitaciones, backlog, commit/tag y próximo componente. Actualizar también `docs/progress.md` y `docs/handoff.md`.
+
 ---
 
 ## ¿Qué es este proyecto?
