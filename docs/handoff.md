@@ -36,6 +36,19 @@ Componentes grandes: Phoenix Core, Execution Gateway, Auditor, Market Regime Eng
 
 El cierre debe incluir: nombre/versión, estado, objetivo, funcionalidades, interfaces, archivos, tests, decisiones, limitaciones, backlog, commit/tag y próximo componente. Actualizar también `docs/progress.md` y `docs/handoff.md`.
 
+El documento del componente debe terminar siempre con una sección `## Estado` que lo marque como CONGELADO.
+
+### Componentes congelados
+
+Un componente marcado como **CONGELADO** no debe modificarse salvo para:
+
+- Corrección de bugs.
+- Problemas de seguridad.
+- Refactorizaciones que no alteren el comportamiento.
+- Cambios aprobados explícitamente.
+
+Antes de modificar un componente congelado, documentar la decisión en `docs/decisions.md` y actualizar el documento del componente con el motivo del cambio. No agregar nuevas funcionalidades directamente sobre un componente congelado.
+
 ---
 
 ## ¿Qué es este proyecto?

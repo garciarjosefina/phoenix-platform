@@ -142,3 +142,24 @@ Candidatos documentados en `docs/progress.md`:
 - Execution Gateway (cliente Bybit)
 - Bot SDK (lógica de bots)
 - Primer despliegue en Railway
+
+---
+
+## Estado
+
+Versión: 0.1.0
+
+Estado: CONGELADO
+
+Este componente se considera finalizado.
+
+Solo puede modificarse para:
+
+- Corrección de bugs.
+- Problemas de seguridad.
+- Refactorizaciones que no alteren el comportamiento.
+- Cambios aprobados explícitamente.
+
+No agregar nuevas funcionalidades directamente sobre un componente congelado.
+
+Si una nueva funcionalidad requiere modificar este componente, primero debe documentarse la decisión en `docs/decisions.md` y actualizar el documento del componente indicando el motivo del cambio.
