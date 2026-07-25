@@ -60,11 +60,11 @@ Phoenix Platform es una plataforma modular de trading algorítmico. Está siendo
 ## Estado al 2026-07-23
 
 - **Tag activo:** `v0.1.0`
-- **Tests:** 250 passing, 0 failing
+- **Tests:** 256 passing, 0 failing
 - **Python:** 3.14 en local (requisito mínimo: 3.12)
 - **Railway:** proyecto creado, sin servicios desplegados
 - **GitHub:** `garciarjosefina/phoenix-platform`, rama `main`
-- **Fase activa:** Fase 3 — Execution Gateway (Hito 3.7 completado)
+- **Fase activa:** Fase 3 — Execution Gateway (Hito 3.8 completado)
 
 ---
 
@@ -78,8 +78,9 @@ Phoenix Platform es una plataforma modular de trading algorítmico. Está siendo
 - 3.5 — `FakeExecutionGateway` (`fake_gateway.py`), 15 tests
 - 3.6 — `DryRunExecutionGateway` (`dry_run_gateway.py`), 18 tests
 - 3.7 — `create_execution_gateway` factory (`factory.py`), 10 tests
+- 3.8 — `GatewayConfig.environment` restringido a `"demo"` (D-011), 21 tests en config
 
-**Tests totales:** 250 passing
+**Tests totales:** 256 passing
 
 **Próximo hito:** por definir.
 

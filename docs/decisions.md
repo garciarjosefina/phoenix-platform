@@ -89,3 +89,16 @@
 **Decisión:** Los archivos `docs/progress.md`, `docs/decisions.md` y `docs/handoff.md` son la fuente de verdad. Se actualizan al finalizar cada hito.
 **Razón:** El contexto del chat no persiste entre sesiones. La documentación garantiza continuidad.
 **Regla:** Leer estos archivos antes de comenzar cualquier trabajo nuevo.
+
+---
+
+## D-011 — Bybit Demo como único entorno soportado
+
+**Fecha:** 2026-07-25
+**Decisión:** `GatewayConfig.environment` acepta únicamente el valor `"demo"` (Bybit Demo). El valor predeterminado es `"demo"`.
+**Razón:** Phoenix opera exclusivamente en Bybit Demo. No existe necesidad actual de testnet ni mainnet.
+**Consecuencias:**
+- `testnet` queda excluido y rechazado explícitamente.
+- `mainnet` no se implementará salvo decisión explícita futura.
+- No se agrega soporte preventivo para entornos no requeridos.
+- La validación es estricta y sensible a mayúsculas y minúsculas (`"DEMO"` y `"Demo"` son inválidos).

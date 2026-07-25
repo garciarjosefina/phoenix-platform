@@ -3,7 +3,7 @@
 ## Estado actual
 
 **Versión:** `v0.1.0` (tag en `main`)
-**Tests:** 250 passing
+**Tests:** 256 passing
 **Rama activa:** `main`
 **Última actualización:** 2026-07-23
 
@@ -56,7 +56,8 @@
 | 3.4 | Interfaz pública (`ExecutionGateway` Protocol) — 11 tests | `461532b` |
 | 3.5 | Implementación determinística (`FakeExecutionGateway`) — 15 tests | `748d52b` |
 | 3.6 | Gateway dry-run (`DryRunExecutionGateway`) — 18 tests | `fd90fde` |
-| 3.7 | Factory del gateway (`create_execution_gateway`) — 10 tests | `(próximo commit)` |
+| 3.7 | Factory del gateway (`create_execution_gateway`) — 10 tests | `44c5fac` |
+| 3.8 | Entorno restringido a Bybit Demo (`environment="demo"`) — 21 tests en config | `(próximo commit)` |
 
 ### Próximo hito
 
