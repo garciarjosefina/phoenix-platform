@@ -4,6 +4,7 @@ from execution_gateway.config import GatewayConfig
 from execution_gateway.contracts import ExecutionRequest, ExecutionResult
 from execution_gateway.gateway import ExecutionGateway
 from execution_gateway.fake_gateway import FakeExecutionGateway
+from execution_gateway.dry_run_gateway import DryRunExecutionGateway
 
 __all__ = [
     "__version__",
@@ -12,4 +13,5 @@ __all__ = [
     "ExecutionResult",
     "ExecutionGateway",
     "FakeExecutionGateway",
+    "DryRunExecutionGateway",
 ]
