@@ -92,6 +92,13 @@
 
 ---
 
+## D-012 — Contratos internos antes de SDKs externos
+
+**Fecha:** 2026-07-25
+**Decisión:** Las dependencias externas de Phoenix se incorporan primero mediante contratos internos mínimos y después mediante implementaciones concretas. El dominio no debe depender directamente de SDKs o librerías de proveedores externos.
+
+---
+
 ## D-011 — Bybit Demo como único entorno soportado
 
 **Fecha:** 2026-07-25

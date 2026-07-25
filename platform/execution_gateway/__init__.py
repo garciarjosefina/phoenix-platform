@@ -7,6 +7,7 @@ from execution_gateway.fake_gateway import FakeExecutionGateway
 from execution_gateway.dry_run_gateway import DryRunExecutionGateway
 from execution_gateway.factory import create_execution_gateway
 from execution_gateway.credentials import BybitDemoCredentials
+from execution_gateway.bybit_client import BybitDemoClient
 
 __all__ = [
     "__version__",
@@ -18,4 +19,5 @@ __all__ = [
     "DryRunExecutionGateway",
     "create_execution_gateway",
     "BybitDemoCredentials",
+    "BybitDemoClient",
 ]

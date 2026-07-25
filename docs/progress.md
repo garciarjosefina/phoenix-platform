@@ -3,7 +3,7 @@
 ## Estado actual
 
 **Versión:** `v0.1.0` (tag en `main`)
-**Tests:** 284 passing
+**Tests:** 298 passing
 **Rama activa:** `main`
 **Última actualización:** 2026-07-25
 
@@ -59,6 +59,7 @@
 | 3.7 | Factory del gateway (`create_execution_gateway`) — 10 tests | `44c5fac` |
 | 3.8 | Entorno restringido a Bybit Demo (`environment="demo"`) — 21 tests en config | `cfd64cc` |
 | 3.9 | Contrato de credenciales Bybit Demo (`BybitDemoCredentials`) — 28 tests | `3ee7df4` |
+| 3.10 | Contrato del cliente de órdenes Bybit Demo (`BybitDemoClient`) — 14 tests | `(próximo commit)` |
 
 ### Próximo hito
 
