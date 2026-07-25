@@ -3,7 +3,7 @@
 ## Estado actual
 
 **Versión:** `v0.1.0` (tag en `main`)
-**Tests:** 240 passing
+**Tests:** 250 passing
 **Rama activa:** `main`
 **Última actualización:** 2026-07-23
 
@@ -55,7 +55,8 @@
 | 3.3 | Contratos de ejecución (`ExecutionRequest`, `ExecutionResult`) — 37 tests | `8a61025` |
 | 3.4 | Interfaz pública (`ExecutionGateway` Protocol) — 11 tests | `461532b` |
 | 3.5 | Implementación determinística (`FakeExecutionGateway`) — 15 tests | `748d52b` |
-| 3.6 | Gateway dry-run (`DryRunExecutionGateway`) — 18 tests | `(próximo commit)` |
+| 3.6 | Gateway dry-run (`DryRunExecutionGateway`) — 18 tests | `fd90fde` |
+| 3.7 | Factory del gateway (`create_execution_gateway`) — 10 tests | `(próximo commit)` |
 
 ### Próximo hito
 
