@@ -3,9 +3,9 @@
 ## Estado actual
 
 **Versión:** `v0.1.0` (tag en `main`)
-**Tests:** 256 passing
+**Tests:** 284 passing
 **Rama activa:** `main`
-**Última actualización:** 2026-07-23
+**Última actualización:** 2026-07-25
 
 ---
 
@@ -57,7 +57,8 @@
 | 3.5 | Implementación determinística (`FakeExecutionGateway`) — 15 tests | `748d52b` |
 | 3.6 | Gateway dry-run (`DryRunExecutionGateway`) — 18 tests | `fd90fde` |
 | 3.7 | Factory del gateway (`create_execution_gateway`) — 10 tests | `44c5fac` |
-| 3.8 | Entorno restringido a Bybit Demo (`environment="demo"`) — 21 tests en config | `(próximo commit)` |
+| 3.8 | Entorno restringido a Bybit Demo (`environment="demo"`) — 21 tests en config | `cfd64cc` |
+| 3.9 | Contrato de credenciales Bybit Demo (`BybitDemoCredentials`) — 28 tests | `(próximo commit)` |
 
 ### Próximo hito
 
