@@ -3,7 +3,7 @@
 ## Estado actual
 
 **Versión:** `v0.1.0` (tag en `main`)
-**Tests:** 207 passing
+**Tests:** 222 passing
 **Rama activa:** `main`
 **Última actualización:** 2026-07-23
 
@@ -53,7 +53,8 @@
 | 3.1 | Inicializar paquete `execution_gateway` (`__init__.py` + test de importación) | `fcb8efb` |
 | 3.2 | Configuración del gateway (`GatewayConfig`) — environment, dry_run, timeout | `(ver commit 3.2)` |
 | 3.3 | Contratos de ejecución (`ExecutionRequest`, `ExecutionResult`) — 37 tests | `8a61025` |
-| 3.4 | Interfaz pública (`ExecutionGateway` Protocol) — 11 tests | `(próximo commit)` |
+| 3.4 | Interfaz pública (`ExecutionGateway` Protocol) — 11 tests | `461532b` |
+| 3.5 | Implementación determinística (`FakeExecutionGateway`) — 15 tests | `(próximo commit)` |
 
 ### Próximo hito
 
