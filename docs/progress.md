@@ -58,7 +58,7 @@
 | 3.6 | Gateway dry-run (`DryRunExecutionGateway`) — 18 tests | `fd90fde` |
 | 3.7 | Factory del gateway (`create_execution_gateway`) — 10 tests | `44c5fac` |
 | 3.8 | Entorno restringido a Bybit Demo (`environment="demo"`) — 21 tests en config | `cfd64cc` |
-| 3.9 | Contrato de credenciales Bybit Demo (`BybitDemoCredentials`) — 28 tests | `(próximo commit)` |
+| 3.9 | Contrato de credenciales Bybit Demo (`BybitDemoCredentials`) — 28 tests | `3ee7df4` |
 
 ### Próximo hito
 
