@@ -112,8 +112,9 @@ Phoenix Platform es una plataforma modular de trading algorítmico. Está siendo
 - 3.39 — `BybitCreateOrderResponseInterpreter` (`bybit_create_order_response_interpreter.py`), 73 tests — interpreta `BybitResponse` (ret_code==0) → `BybitCreateOrderResult`; no integrado en operación ni en cliente; `BybitDemoClient.create_order()` continúa devolviendo `BybitResponse`; `ret_code != 0` lanza `ValueError` temporalmente
 - 3.40 — Integración del intérprete en `BybitCreateOrderOperation` (`bybit_create_order_operation.py`), 76 tests — cadena completa: `BybitCreateOrderRequest → BybitCreateOrderPayloadBuilder → BYBIT_CREATE_ORDER_ENDPOINT → BybitEndpointExecutor → BybitResponse → BybitCreateOrderResponseInterpreter → BybitCreateOrderResult`; `BybitDemoClient` no modificado
 - 3.41 — Adaptación de `BybitDemoClient.create_order` al resultado interpretado (`bybit_client.py`), 64 tests — anotación de retorno cambiada de `BybitResponse` a `BybitCreateOrderResult`; import de `BybitResponse` eliminado; cadena pública completa: `BybitCreateOrderRequest → BybitDemoClient.create_order() → BybitCreateOrderOperation.execute() → BybitCreateOrderResult`; respuestas rechazadas (`ret_code != 0`) generan `ValueError` propagado desde el intérprete a través de la operación; cancelación, consultas y posiciones todavía no implementadas
+- 3.42 — Excepción mínima para errores de la API de Bybit (`bybit_api_error.py`), 61 tests — `BybitApiError(Exception)` con campos `ret_code: int` y `ret_msg: str`; keyword-only; mensaje determinista `"Bybit API error {ret_code}: {ret_msg}"`; todavía no integrada en el intérprete; `BybitCreateOrderResponseInterpreter` continúa lanzando `ValueError` temporalmente; clasificación de errores y retries pendientes
 
-**Tests totales:** 1646 passing
+**Tests totales:** 1707 passing
 
 **Próximo hito:** por definir.
 

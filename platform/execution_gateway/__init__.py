@@ -36,6 +36,7 @@ from execution_gateway.bybit_create_order_payload_builder import BybitCreateOrde
 from execution_gateway.bybit_create_order_operation import BybitCreateOrderOperation
 from execution_gateway.bybit_create_order_result import BybitCreateOrderResult
 from execution_gateway.bybit_create_order_response_interpreter import BybitCreateOrderResponseInterpreter
+from execution_gateway.bybit_api_error import BybitApiError
 
 __all__ = [
     "__version__",
@@ -77,4 +78,5 @@ __all__ = [
     "BybitCreateOrderOperation",
     "BybitCreateOrderResult",
     "BybitCreateOrderResponseInterpreter",
+    "BybitApiError",
 ]

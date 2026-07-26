@@ -90,7 +90,8 @@
 | 3.38 | Value object de resultado de creación de orden (`BybitCreateOrderResult`) — 62 tests | `4485485` |
 | 3.39 | Intérprete de respuesta exitosa de creación de orden (`BybitCreateOrderResponseInterpreter`) — 73 tests | pendiente |
 | 3.40 | Integración del intérprete en `BybitCreateOrderOperation` — 76 tests | `cd54d06` |
-| 3.41 | Adaptación de `BybitDemoClient.create_order` al resultado interpretado — 64 tests | pendiente |
+| 3.41 | Adaptación de `BybitDemoClient.create_order` al resultado interpretado — 64 tests | `579cd6a` |
+| 3.42 | Excepción mínima para errores de la API de Bybit (`BybitApiError`) — 61 tests | pendiente |
 
 ### Próximo hito
 
