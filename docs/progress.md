@@ -3,7 +3,7 @@
 ## Estado actual
 
 **Versión:** `v0.1.0` (tag en `main`)
-**Tests:** 327 passing
+**Tests:** 344 passing
 **Rama activa:** `main`
 **Última actualización:** 2026-07-25
 
@@ -61,7 +61,8 @@
 | 3.9 | Contrato de credenciales Bybit Demo (`BybitDemoCredentials`) — 28 tests | `3ee7df4` |
 | 3.10 | Contrato del cliente de órdenes Bybit Demo (`BybitDemoClient`) — 14 tests | `333096a` |
 | 3.11 | Adaptador `BybitExecutionGateway` — 19 tests | `40f0c58` |
-| 3.12 | Integración de `BybitExecutionGateway` en la factory — 10 tests nuevos | `(próximo commit)` |
+| 3.12 | Integración de `BybitExecutionGateway` en la factory — 10 tests nuevos | `282478b` |
+| 3.13 | Contrato de transporte HTTP (`HttpTransport`) — 17 tests | `(próximo commit)` |
 
 ### Próximo hito
 
