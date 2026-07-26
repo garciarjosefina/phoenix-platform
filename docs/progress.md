@@ -3,7 +3,7 @@
 ## Estado actual
 
 **Versión:** `v0.1.0` (tag en `main`)
-**Tests:** 683 passing
+**Tests:** 730 passing
 **Rama activa:** `main`
 **Última actualización:** 2026-07-25
 
@@ -74,6 +74,7 @@
 | 3.22 | Constructor de headers privados (`BybitHeaderBuilder`) — 31 tests | `8be2e77` |
 | 3.23 | Implementación HTTP estándar (`UrllibHttpTransport`) — 45 tests | `f363f55` |
 | 3.24 | Constructor de solicitud HTTP preparada (`HttpRequest` + `BybitRequestBuilder`) — 58 tests | `6eab0ab` |
+| 3.25 | Ejecutor de solicitudes HTTP preparadas (`HttpRequestExecutor`) — 47 tests | `(próximo commit)` |
 
 ### Próximo hito
 
