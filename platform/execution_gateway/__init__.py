@@ -27,6 +27,7 @@ from execution_gateway.bybit_private_request_sender import BybitPrivateRequestSe
 from execution_gateway.bybit_response import BybitResponse
 from execution_gateway.bybit_response_parser import BybitResponseParser
 from execution_gateway.bybit_private_api import BybitPrivateApi
+from execution_gateway.bybit_endpoint import BybitEndpoint
 
 __all__ = [
     "__version__",
@@ -59,4 +60,5 @@ __all__ = [
     "BybitResponse",
     "BybitResponseParser",
     "BybitPrivateApi",
+    "BybitEndpoint",
 ]

@@ -3,7 +3,7 @@
 ## Estado actual
 
 **Versión:** `v0.1.0` (tag en `main`)
-**Tests:** 962 passing
+**Tests:** 1020 passing
 **Rama activa:** `main`
 **Última actualización:** 2026-07-25
 
@@ -78,7 +78,8 @@
 | 3.26 | Emisor de solicitudes privadas de Bybit Demo (`BybitPrivateRequestSender`) — 58 tests | `36f30be` |
 | 3.27 | Resultado normalizado de respuesta privada Bybit Demo (`BybitResponse`) — 59 tests | `108772b` |
 | 3.28 | Parser de respuesta privada Bybit Demo (`BybitResponseParser`) — 63 tests | `1464b56` |
-| 3.29 | Servicio de solicitud privada Bybit Demo con respuesta normalizada (`BybitPrivateApi`) — 52 tests | pendiente |
+| 3.29 | Servicio de solicitud privada Bybit Demo con respuesta normalizada (`BybitPrivateApi`) — 52 tests | `f54f772` |
+| 3.30 | Value object de endpoint privado Bybit Demo (`BybitEndpoint`) — 58 tests | pendiente |
 
 ### Próximo hito
 
