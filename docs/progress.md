@@ -3,7 +3,7 @@
 ## Estado actual
 
 **Versión:** `v0.1.0` (tag en `main`)
-**Tests:** 1179 passing
+**Tests:** 1298 passing
 **Rama activa:** `main`
 **Última actualización:** 2026-07-25
 
@@ -82,11 +82,12 @@
 | 3.30 | Value object de endpoint privado Bybit Demo (`BybitEndpoint`) — 58 tests | `42a58cf` |
 | 3.31 | Constructor de URL para endpoints Bybit Demo (`BybitUrlBuilder`) — 52 tests | `3055157` |
 | 3.32 | Ejecutor de endpoint privado Bybit Demo (`BybitEndpointExecutor`) — 67 tests | `9ba22f7` |
-| 3.33 | Endpoint privado de creación de órdenes Bybit Demo (`BYBIT_CREATE_ORDER_ENDPOINT`) — 40 tests | pendiente |
+| 3.33 | Endpoint privado de creación de órdenes Bybit Demo (`BYBIT_CREATE_ORDER_ENDPOINT`) — 40 tests | `affd531` |
+| 3.34 | Value object de solicitud de creación de orden Bybit Demo (`BybitCreateOrderRequest`) — 119 tests | pendiente |
 
 ### Próximo hito
 
-> **Nota:** `BYBIT_CREATE_ORDER_ENDPOINT` está declarado. La operación de creación de órdenes todavía **no está implementada**.
+> **Nota:** `BYBIT_CREATE_ORDER_ENDPOINT` declarado. `BybitCreateOrderRequest` definido. El payload HTTP y la operación de creación de órdenes todavía **no están implementados**.
 
 
 
