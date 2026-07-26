@@ -6,6 +6,8 @@ from execution_gateway import (
     BybitCreateOrderOperation,
     BybitCreateOrderPayloadBuilder,
     BybitCreateOrderRequest,
+    BybitCreateOrderResponseInterpreter,
+    BybitCreateOrderResult,
     BybitEndpointExecutor,
     BybitResponse,
     BYBIT_CREATE_ORDER_ENDPOINT,
@@ -37,6 +39,18 @@ class SpyEndpointExecutor(BybitEndpointExecutor):
         return self._return_value
 
 
+class SpyResponseInterpreter(BybitCreateOrderResponseInterpreter):
+    def __init__(self):
+        self.calls = []
+        self._return_value = BybitCreateOrderResult(
+            order_id="abc123", order_link_id="test-link-id-1"
+        )
+
+    def interpret(self, *, response):
+        self.calls.append(response)
+        return self._return_value
+
+
 class FailingPayloadBuilder(BybitCreateOrderPayloadBuilder):
     def __init__(self):
         pass
@@ -53,6 +67,14 @@ class FailingEndpointExecutor(BybitEndpointExecutor):
         raise RuntimeError("executor failed")
 
 
+class FailingResponseInterpreter(BybitCreateOrderResponseInterpreter):
+    def __init__(self):
+        pass
+
+    def interpret(self, *, response):
+        raise RuntimeError("interpreter failed")
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -61,7 +83,7 @@ def _make_response(ret_code: int = 0) -> BybitResponse:
     return BybitResponse(
         ret_code=ret_code,
         ret_msg="OK",
-        result={"orderId": "abc123"},
+        result={"orderId": "abc123", "orderLinkId": "link-id-1"},
         ret_ext_info={},
         time_ms=1000,
     )
@@ -98,10 +120,12 @@ def _limit_request(**kwargs) -> BybitCreateOrderRequest:
 def _make_op(
     builder: BybitCreateOrderPayloadBuilder | None = None,
     executor: BybitEndpointExecutor | None = None,
+    interpreter: BybitCreateOrderResponseInterpreter | None = None,
 ) -> BybitCreateOrderOperation:
     return BybitCreateOrderOperation(
         payload_builder=builder or SpyPayloadBuilder(),
         endpoint_executor=executor or SpyEndpointExecutor(),
+        response_interpreter=interpreter or SpyResponseInterpreter(),
     )
 
 
@@ -142,6 +166,7 @@ class TestConstructor:
         op = BybitCreateOrderOperation(
             payload_builder=b,
             endpoint_executor=SpyEndpointExecutor(),
+            response_interpreter=SpyResponseInterpreter(),
         )
         assert op._payload_builder is b
 
@@ -150,14 +175,25 @@ class TestConstructor:
         op = BybitCreateOrderOperation(
             payload_builder=SpyPayloadBuilder(),
             endpoint_executor=e,
+            response_interpreter=SpyResponseInterpreter(),
         )
         assert op._endpoint_executor is e
+
+    def test_stores_response_interpreter(self):
+        i = SpyResponseInterpreter()
+        op = BybitCreateOrderOperation(
+            payload_builder=SpyPayloadBuilder(),
+            endpoint_executor=SpyEndpointExecutor(),
+            response_interpreter=i,
+        )
+        assert op._response_interpreter is i
 
     def test_rejects_invalid_payload_builder(self):
         with pytest.raises(TypeError, match="payload_builder must be BybitCreateOrderPayloadBuilder"):
             BybitCreateOrderOperation(
                 payload_builder=object(),
                 endpoint_executor=SpyEndpointExecutor(),
+                response_interpreter=SpyResponseInterpreter(),
             )
 
     def test_rejects_none_payload_builder(self):
@@ -165,6 +201,7 @@ class TestConstructor:
             BybitCreateOrderOperation(
                 payload_builder=None,
                 endpoint_executor=SpyEndpointExecutor(),
+                response_interpreter=SpyResponseInterpreter(),
             )
 
     def test_rejects_invalid_endpoint_executor(self):
@@ -172,6 +209,7 @@ class TestConstructor:
             BybitCreateOrderOperation(
                 payload_builder=SpyPayloadBuilder(),
                 endpoint_executor=object(),
+                response_interpreter=SpyResponseInterpreter(),
             )
 
     def test_rejects_none_endpoint_executor(self):
@@ -179,6 +217,23 @@ class TestConstructor:
             BybitCreateOrderOperation(
                 payload_builder=SpyPayloadBuilder(),
                 endpoint_executor=None,
+                response_interpreter=SpyResponseInterpreter(),
+            )
+
+    def test_rejects_invalid_response_interpreter(self):
+        with pytest.raises(TypeError, match="response_interpreter must be BybitCreateOrderResponseInterpreter"):
+            BybitCreateOrderOperation(
+                payload_builder=SpyPayloadBuilder(),
+                endpoint_executor=SpyEndpointExecutor(),
+                response_interpreter=object(),
+            )
+
+    def test_rejects_none_response_interpreter(self):
+        with pytest.raises(TypeError, match="response_interpreter must be BybitCreateOrderResponseInterpreter"):
+            BybitCreateOrderOperation(
+                payload_builder=SpyPayloadBuilder(),
+                endpoint_executor=SpyEndpointExecutor(),
+                response_interpreter=None,
             )
 
     def test_does_not_call_builder_during_construction(self):
@@ -186,6 +241,7 @@ class TestConstructor:
         BybitCreateOrderOperation(
             payload_builder=b,
             endpoint_executor=SpyEndpointExecutor(),
+            response_interpreter=SpyResponseInterpreter(),
         )
         assert b.calls == []
 
@@ -194,15 +250,31 @@ class TestConstructor:
         BybitCreateOrderOperation(
             payload_builder=SpyPayloadBuilder(),
             endpoint_executor=e,
+            response_interpreter=SpyResponseInterpreter(),
         )
         assert e.calls == []
+
+    def test_does_not_call_interpreter_during_construction(self):
+        i = SpyResponseInterpreter()
+        BybitCreateOrderOperation(
+            payload_builder=SpyPayloadBuilder(),
+            endpoint_executor=SpyEndpointExecutor(),
+            response_interpreter=i,
+        )
+        assert i.calls == []
 
     def test_no_internally_created_dependencies(self):
         b = SpyPayloadBuilder()
         e = SpyEndpointExecutor()
-        op = BybitCreateOrderOperation(payload_builder=b, endpoint_executor=e)
+        i = SpyResponseInterpreter()
+        op = BybitCreateOrderOperation(
+            payload_builder=b,
+            endpoint_executor=e,
+            response_interpreter=i,
+        )
         assert op._payload_builder is b
         assert op._endpoint_executor is e
+        assert op._response_interpreter is i
 
     def test_does_not_read_env_vars(self, monkeypatch):
         monkeypatch.setenv("BYBIT_API_KEY", "should-not-be-read")
@@ -271,9 +343,33 @@ class TestComposition:
         op = BybitCreateOrderOperation(
             payload_builder=OrderedBuilder(),
             endpoint_executor=OrderedExecutor(),
+            response_interpreter=SpyResponseInterpreter(),
         )
         op.execute(request=_market_request())
         assert order == ["builder", "executor"]
+
+    def test_executor_called_before_interpreter(self):
+        order = []
+
+        class OrderedExecutor(BybitEndpointExecutor):
+            def __init__(self): pass
+            def execute(self, *, endpoint, payload):
+                order.append("executor")
+                return _make_response()
+
+        class OrderedInterpreter(BybitCreateOrderResponseInterpreter):
+            def __init__(self): pass
+            def interpret(self, *, response):
+                order.append("interpreter")
+                return BybitCreateOrderResult(order_id="x", order_link_id="y")
+
+        op = BybitCreateOrderOperation(
+            payload_builder=SpyPayloadBuilder(),
+            endpoint_executor=OrderedExecutor(),
+            response_interpreter=OrderedInterpreter(),
+        )
+        op.execute(request=_market_request())
+        assert order == ["executor", "interpreter"]
 
     def test_builder_called_exactly_once(self):
         b = SpyPayloadBuilder()
@@ -286,6 +382,12 @@ class TestComposition:
         op = _make_op(executor=e)
         op.execute(request=_market_request())
         assert len(e.calls) == 1
+
+    def test_interpreter_called_exactly_once(self):
+        i = SpyResponseInterpreter()
+        op = _make_op(interpreter=i)
+        op.execute(request=_market_request())
+        assert len(i.calls) == 1
 
     def test_request_sent_by_identity_to_builder(self):
         b = SpyPayloadBuilder()
@@ -305,6 +407,7 @@ class TestComposition:
         op = BybitCreateOrderOperation(
             payload_builder=FixedBuilder(),
             endpoint_executor=e,
+            response_interpreter=SpyResponseInterpreter(),
         )
         op.execute(request=_market_request())
         _, received_payload = e.calls[0]
@@ -317,37 +420,21 @@ class TestComposition:
         received_endpoint, _ = e.calls[0]
         assert received_endpoint is BYBIT_CREATE_ORDER_ENDPOINT
 
-    def test_response_returned_by_identity(self):
-        expected = _make_response()
+    def test_response_passed_to_interpreter_by_identity(self):
+        expected_response = _make_response()
+        interpreter = SpyResponseInterpreter()
 
         class FixedExecutor(BybitEndpointExecutor):
             def __init__(self): pass
-            def execute(self, *, endpoint, payload): return expected
+            def execute(self, *, endpoint, payload): return expected_response
 
         op = BybitCreateOrderOperation(
             payload_builder=SpyPayloadBuilder(),
             endpoint_executor=FixedExecutor(),
+            response_interpreter=interpreter,
         )
-        result = op.execute(request=_market_request())
-        assert result is expected
-
-    def test_does_not_create_second_response(self):
-        results = []
-
-        class TrackingExecutor(BybitEndpointExecutor):
-            def __init__(self): pass
-            def execute(self, *, endpoint, payload):
-                r = _make_response()
-                results.append(r)
-                return r
-
-        op = BybitCreateOrderOperation(
-            payload_builder=SpyPayloadBuilder(),
-            endpoint_executor=TrackingExecutor(),
-        )
-        returned = op.execute(request=_market_request())
-        assert returned is results[0]
-        assert len(results) == 1
+        op.execute(request=_market_request())
+        assert interpreter.calls[0] is expected_response
 
     def test_does_not_modify_request(self):
         r = _market_request()
@@ -376,6 +463,7 @@ class TestComposition:
         op = BybitCreateOrderOperation(
             payload_builder=CapturingBuilder(),
             endpoint_executor=CheckingExecutor(),
+            response_interpreter=SpyResponseInterpreter(),
         )
         op.execute(request=_market_request())
 
@@ -474,6 +562,7 @@ class TestPayload:
         op = BybitCreateOrderOperation(
             payload_builder=RefBuilder(),
             endpoint_executor=e,
+            response_interpreter=SpyResponseInterpreter(),
         )
         op.execute(request=_market_request())
         _, received = e.calls[0]
@@ -506,44 +595,18 @@ class TestResponse:
         assert "orderId" not in src
         assert "order_id" not in src
 
-    def test_returns_success_response_by_identity(self):
-        expected = _make_response(ret_code=0)
-
-        class FixedExecutor(BybitEndpointExecutor):
-            def __init__(self): pass
-            def execute(self, *, endpoint, payload): return expected
+    def test_returns_result_from_interpreter(self):
+        interpreter = SpyResponseInterpreter()
+        expected_result = BybitCreateOrderResult(order_id="id-999", order_link_id="link-999")
+        interpreter._return_value = expected_result
 
         op = BybitCreateOrderOperation(
             payload_builder=SpyPayloadBuilder(),
-            endpoint_executor=FixedExecutor(),
-        )
-        assert op.execute(request=_market_request()) is expected
-
-    def test_returns_rejected_response_by_identity(self):
-        rejected = _make_response(ret_code=10001)
-
-        class FixedExecutor(BybitEndpointExecutor):
-            def __init__(self): pass
-            def execute(self, *, endpoint, payload): return rejected
-
-        op = BybitCreateOrderOperation(
-            payload_builder=SpyPayloadBuilder(),
-            endpoint_executor=FixedExecutor(),
-        )
-        assert op.execute(request=_market_request()) is rejected
-
-    def test_does_not_raise_on_nonzero_ret_code(self):
-        class ErrorExecutor(BybitEndpointExecutor):
-            def __init__(self): pass
-            def execute(self, *, endpoint, payload):
-                return _make_response(ret_code=10001)
-
-        op = BybitCreateOrderOperation(
-            payload_builder=SpyPayloadBuilder(),
-            endpoint_executor=ErrorExecutor(),
+            endpoint_executor=SpyEndpointExecutor(),
+            response_interpreter=interpreter,
         )
         result = op.execute(request=_market_request())
-        assert result.ret_code == 10001
+        assert result is expected_result
 
 
 # ---------------------------------------------------------------------------
@@ -565,6 +628,13 @@ class TestMultipleCalls:
         op.execute(request=_market_request())
         assert len(e.calls) == 2
 
+    def test_each_call_invokes_interpreter_again(self):
+        i = SpyResponseInterpreter()
+        op = _make_op(interpreter=i)
+        op.execute(request=_market_request())
+        op.execute(request=_market_request())
+        assert len(i.calls) == 2
+
     def test_order_maintained_on_each_call(self):
         call_order = []
 
@@ -583,6 +653,7 @@ class TestMultipleCalls:
         op = BybitCreateOrderOperation(
             payload_builder=Ordered(),
             endpoint_executor=OrderedEx(),
+            response_interpreter=SpyResponseInterpreter(),
         )
         op.execute(request=_market_request())
         op.execute(request=_market_request())
@@ -598,24 +669,6 @@ class TestMultipleCalls:
         assert b.calls[0] is r1
         assert b.calls[1] is r2
 
-    def test_different_responses_returned_correctly(self):
-        responses = [_make_response(ret_code=0), _make_response(ret_code=10001)]
-        idx = [0]
-
-        class MultiExecutor(BybitEndpointExecutor):
-            def __init__(self): pass
-            def execute(self, *, endpoint, payload):
-                r = responses[idx[0]]
-                idx[0] += 1
-                return r
-
-        op = BybitCreateOrderOperation(
-            payload_builder=SpyPayloadBuilder(),
-            endpoint_executor=MultiExecutor(),
-        )
-        assert op.execute(request=_market_request()) is responses[0]
-        assert op.execute(request=_market_request()) is responses[1]
-
 
 # ---------------------------------------------------------------------------
 # 9. Errores
@@ -626,6 +679,7 @@ class TestErrors:
         op = BybitCreateOrderOperation(
             payload_builder=FailingPayloadBuilder(),
             endpoint_executor=SpyEndpointExecutor(),
+            response_interpreter=SpyResponseInterpreter(),
         )
         with pytest.raises(RuntimeError, match="builder failed"):
             op.execute(request=_market_request())
@@ -635,6 +689,7 @@ class TestErrors:
         op = BybitCreateOrderOperation(
             payload_builder=FailingPayloadBuilder(),
             endpoint_executor=e,
+            response_interpreter=SpyResponseInterpreter(),
         )
         with pytest.raises(RuntimeError):
             op.execute(request=_market_request())
@@ -644,8 +699,29 @@ class TestErrors:
         op = BybitCreateOrderOperation(
             payload_builder=SpyPayloadBuilder(),
             endpoint_executor=FailingEndpointExecutor(),
+            response_interpreter=SpyResponseInterpreter(),
         )
         with pytest.raises(RuntimeError, match="executor failed"):
+            op.execute(request=_market_request())
+
+    def test_interpreter_not_called_when_executor_fails(self):
+        i = SpyResponseInterpreter()
+        op = BybitCreateOrderOperation(
+            payload_builder=SpyPayloadBuilder(),
+            endpoint_executor=FailingEndpointExecutor(),
+            response_interpreter=i,
+        )
+        with pytest.raises(RuntimeError):
+            op.execute(request=_market_request())
+        assert i.calls == []
+
+    def test_interpreter_exception_propagates_exactly(self):
+        op = BybitCreateOrderOperation(
+            payload_builder=SpyPayloadBuilder(),
+            endpoint_executor=SpyEndpointExecutor(),
+            response_interpreter=FailingResponseInterpreter(),
+        )
+        with pytest.raises(RuntimeError, match="interpreter failed"):
             op.execute(request=_market_request())
 
     def test_no_retry_on_builder_failure(self):
@@ -660,6 +736,7 @@ class TestErrors:
         op = BybitCreateOrderOperation(
             payload_builder=CountingBuilder(),
             endpoint_executor=SpyEndpointExecutor(),
+            response_interpreter=SpyResponseInterpreter(),
         )
         with pytest.raises(RuntimeError):
             op.execute(request=_market_request())
@@ -677,6 +754,7 @@ class TestErrors:
         op = BybitCreateOrderOperation(
             payload_builder=SpyPayloadBuilder(),
             endpoint_executor=CountingExecutor(),
+            response_interpreter=SpyResponseInterpreter(),
         )
         with pytest.raises(RuntimeError):
             op.execute(request=_market_request())
@@ -691,6 +769,7 @@ class TestErrors:
         op = BybitCreateOrderOperation(
             payload_builder=WeirdBuilder(),
             endpoint_executor=SpyEndpointExecutor(),
+            response_interpreter=SpyResponseInterpreter(),
         )
         with pytest.raises(ValueError, match="weird error"):
             op.execute(request=_market_request())
@@ -725,9 +804,9 @@ class TestNoStateAndNoExtraResponsibilities:
         assert not hasattr(op, "last_endpoint")
         assert not hasattr(op, "_last_endpoint")
 
-    def test_only_two_instance_vars(self):
+    def test_only_three_instance_vars(self):
         op = _make_op()
-        assert set(vars(op)) == {"_payload_builder", "_endpoint_executor"}
+        assert set(vars(op)) == {"_payload_builder", "_endpoint_executor", "_response_interpreter"}
 
     def test_does_not_import_http_transport(self):
         src_vars = vars(_module)

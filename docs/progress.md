@@ -89,9 +89,8 @@
 | 3.37 | Integración de creación de órdenes en `BybitDemoClient` — 59 tests | `7cc9ea5` |
 | 3.38 | Value object de resultado de creación de orden (`BybitCreateOrderResult`) — 62 tests | `4485485` |
 | 3.39 | Intérprete de respuesta exitosa de creación de orden (`BybitCreateOrderResponseInterpreter`) — 73 tests | pendiente |
+| 3.40 | Integración del intérprete en `BybitCreateOrderOperation` — 76 tests | pendiente |
 
 ### Próximo hito
-
-> **Nota:** `BybitCreateOrderResponseInterpreter` interpreta `BybitResponse` con `ret_code == 0` y construye `BybitCreateOrderResult`. Respuestas con `ret_code != 0` lanzan `ValueError` temporalmente. El intérprete todavía no está integrado en `BybitCreateOrderOperation` ni en `BybitDemoClient`. El cliente continúa devolviendo `BybitResponse`.
 
 Por definir.
