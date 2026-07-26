@@ -3,7 +3,7 @@
 ## Estado actual
 
 **Versión:** `v0.1.0` (tag en `main`)
-**Tests:** 428 passing
+**Tests:** 449 passing
 **Rama activa:** `main`
 **Última actualización:** 2026-07-25
 
@@ -66,7 +66,8 @@
 | 3.14 | Contrato de serialización JSON (`JsonSerializer`) — 16 tests | `873f1c2` |
 | 3.15 | Implementación estándar (`StandardJsonSerializer`) — 32 tests | `0fde1d1` |
 | 3.16 | Contrato de reloj en milisegundos (`MillisecondClock`) — 16 tests | `22a013f` |
-| 3.17 | Implementación estándar (`SystemMillisecondClock`) — 20 tests | `(próximo commit)` |
+| 3.17 | Implementación estándar (`SystemMillisecondClock`) — 20 tests | `fb4caf6` |
+| 3.18 | Contrato de firma HMAC SHA-256 (`MessageSigner`) — 21 tests | `(próximo commit)` |
 
 ### Próximo hito
 

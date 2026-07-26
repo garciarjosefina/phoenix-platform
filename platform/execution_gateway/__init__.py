@@ -14,6 +14,7 @@ from execution_gateway.json_serializer import JsonSerializer
 from execution_gateway.standard_json_serializer import StandardJsonSerializer
 from execution_gateway.millisecond_clock import MillisecondClock
 from execution_gateway.system_millisecond_clock import SystemMillisecondClock
+from execution_gateway.message_signer import MessageSigner
 
 __all__ = [
     "__version__",
@@ -32,4 +33,5 @@ __all__ = [
     "StandardJsonSerializer",
     "MillisecondClock",
     "SystemMillisecondClock",
+    "MessageSigner",
 ]
