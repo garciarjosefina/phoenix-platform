@@ -73,7 +73,7 @@
 | 3.21 | Implementación estándar de autenticación (`StandardBybitAuthenticator`) — 40 tests | `2ad9ed4` |
 | 3.22 | Constructor de headers privados (`BybitHeaderBuilder`) — 31 tests | `8be2e77` |
 | 3.23 | Implementación HTTP estándar (`UrllibHttpTransport`) — 45 tests | `f363f55` |
-| 3.24 | Constructor de solicitud HTTP preparada (`HttpRequest` + `BybitRequestBuilder`) — 58 tests | `(próximo commit)` |
+| 3.24 | Constructor de solicitud HTTP preparada (`HttpRequest` + `BybitRequestBuilder`) — 58 tests | `6eab0ab` |
 
 ### Próximo hito
 
