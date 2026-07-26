@@ -20,6 +20,8 @@ from execution_gateway.bybit_authenticator import BybitAuthentication, BybitAuth
 from execution_gateway.standard_bybit_authenticator import StandardBybitAuthenticator
 from execution_gateway.bybit_header_builder import BybitHeaderBuilder
 from execution_gateway.urllib_http_transport import UrllibHttpTransport
+from execution_gateway.http_request import HttpRequest
+from execution_gateway.bybit_request_builder import BybitRequestBuilder
 
 __all__ = [
     "__version__",
@@ -45,4 +47,6 @@ __all__ = [
     "StandardBybitAuthenticator",
     "BybitHeaderBuilder",
     "UrllibHttpTransport",
+    "HttpRequest",
+    "BybitRequestBuilder",
 ]
