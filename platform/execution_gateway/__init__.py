@@ -13,6 +13,7 @@ from execution_gateway.http_transport import HttpTransport
 from execution_gateway.json_serializer import JsonSerializer
 from execution_gateway.standard_json_serializer import StandardJsonSerializer
 from execution_gateway.millisecond_clock import MillisecondClock
+from execution_gateway.system_millisecond_clock import SystemMillisecondClock
 
 __all__ = [
     "__version__",
@@ -30,4 +31,5 @@ __all__ = [
     "JsonSerializer",
     "StandardJsonSerializer",
     "MillisecondClock",
+    "SystemMillisecondClock",
 ]
