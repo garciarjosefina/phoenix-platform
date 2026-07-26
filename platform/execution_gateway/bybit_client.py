@@ -2,7 +2,7 @@ from abc import ABCMeta
 
 from execution_gateway.bybit_create_order_operation import BybitCreateOrderOperation
 from execution_gateway.bybit_create_order_request import BybitCreateOrderRequest
-from execution_gateway.bybit_response import BybitResponse
+from execution_gateway.bybit_create_order_result import BybitCreateOrderResult
 
 
 class BybitDemoClient(metaclass=ABCMeta):
@@ -22,7 +22,7 @@ class BybitDemoClient(metaclass=ABCMeta):
             )
         self._create_order_operation = create_order_operation
 
-    def create_order(self, *, request: BybitCreateOrderRequest) -> BybitResponse:
+    def create_order(self, *, request: BybitCreateOrderRequest) -> BybitCreateOrderResult:
         if not isinstance(request, BybitCreateOrderRequest):
             raise TypeError(
                 f"request must be BybitCreateOrderRequest, "

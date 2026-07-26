@@ -111,8 +111,9 @@ Phoenix Platform es una plataforma modular de trading algorítmico. Está siendo
 - 3.38 — `BybitCreateOrderResult` (`bybit_create_order_result.py`), 62 tests — value object de salida (`order_id`, `order_link_id`)
 - 3.39 — `BybitCreateOrderResponseInterpreter` (`bybit_create_order_response_interpreter.py`), 73 tests — interpreta `BybitResponse` (ret_code==0) → `BybitCreateOrderResult`; no integrado en operación ni en cliente; `BybitDemoClient.create_order()` continúa devolviendo `BybitResponse`; `ret_code != 0` lanza `ValueError` temporalmente
 - 3.40 — Integración del intérprete en `BybitCreateOrderOperation` (`bybit_create_order_operation.py`), 76 tests — cadena completa: `BybitCreateOrderRequest → BybitCreateOrderPayloadBuilder → BYBIT_CREATE_ORDER_ENDPOINT → BybitEndpointExecutor → BybitResponse → BybitCreateOrderResponseInterpreter → BybitCreateOrderResult`; `BybitDemoClient` no modificado
+- 3.41 — Adaptación de `BybitDemoClient.create_order` al resultado interpretado (`bybit_client.py`), 64 tests — anotación de retorno cambiada de `BybitResponse` a `BybitCreateOrderResult`; import de `BybitResponse` eliminado; cadena pública completa: `BybitCreateOrderRequest → BybitDemoClient.create_order() → BybitCreateOrderOperation.execute() → BybitCreateOrderResult`; respuestas rechazadas (`ret_code != 0`) generan `ValueError` propagado desde el intérprete a través de la operación; cancelación, consultas y posiciones todavía no implementadas
 
-**Tests totales:** 1641 passing
+**Tests totales:** 1646 passing
 
 **Próximo hito:** por definir.
 

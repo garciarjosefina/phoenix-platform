@@ -5,7 +5,7 @@ import pytest
 from execution_gateway.bybit_client import BybitDemoClient
 from execution_gateway.bybit_create_order_operation import BybitCreateOrderOperation
 from execution_gateway.bybit_create_order_request import BybitCreateOrderRequest
-from execution_gateway.bybit_response import BybitResponse
+from execution_gateway.bybit_create_order_result import BybitCreateOrderResult
 import execution_gateway
 import execution_gateway.bybit_client as _module
 
@@ -17,7 +17,7 @@ import execution_gateway.bybit_client as _module
 class SpyOperation(BybitCreateOrderOperation):
     def __init__(self):
         self.calls = []
-        self._return_value = _make_response()
+        self._return_value = _make_result()
 
     def execute(self, *, request):
         self.calls.append(request)
@@ -36,14 +36,11 @@ class FailingOperation(BybitCreateOrderOperation):
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _make_response(ret_code: int = 0) -> BybitResponse:
-    return BybitResponse(
-        ret_code=ret_code,
-        ret_msg="OK",
-        result={"orderId": "abc123"},
-        ret_ext_info={},
-        time_ms=1000,
-    )
+def _make_result(
+    order_id: str = "abc123",
+    order_link_id: str = "link-id-1",
+) -> BybitCreateOrderResult:
+    return BybitCreateOrderResult(order_id=order_id, order_link_id=order_link_id)
 
 
 def _market_request(**kwargs) -> BybitCreateOrderRequest:
@@ -219,27 +216,28 @@ class TestDelegation:
         client.create_order(request=r)
         assert op.calls[0] is r
 
-    def test_returns_response_by_identity(self):
-        expected = _make_response()
+    def test_returns_result_by_identity(self):
+        expected = _make_result()
         op = SpyOperation()
         op._return_value = expected
         client = BybitDemoClient(create_order_operation=op)
         result = client.create_order(request=_market_request())
         assert result is expected
 
-    def test_does_not_create_second_response(self):
-        responses = []
+    def test_does_not_create_second_result(self):
+        results = []
+
         class TrackingOp(BybitCreateOrderOperation):
             def __init__(self): pass
             def execute(self, *, request):
-                r = _make_response()
-                responses.append(r)
+                r = _make_result()
+                results.append(r)
                 return r
 
         client = BybitDemoClient(create_order_operation=TrackingOp())
         returned = client.create_order(request=_market_request())
-        assert returned is responses[0]
-        assert len(responses) == 1
+        assert returned is results[0]
+        assert len(results) == 1
 
     def test_does_not_modify_request(self):
         op = SpyOperation()
@@ -269,30 +267,50 @@ class TestDelegation:
 
 
 # ---------------------------------------------------------------------------
-# 5. Respuesta
+# 5. Resultado
 # ---------------------------------------------------------------------------
 
 class TestResponse:
-    def test_returns_success_response_by_identity(self):
-        expected = _make_response(ret_code=0)
+    def test_returns_result_from_operation(self):
+        expected = _make_result(order_id="ord-xyz", order_link_id="link-xyz")
         op = SpyOperation()
         op._return_value = expected
         client = _make_client(op)
         assert client.create_order(request=_market_request()) is expected
 
-    def test_returns_rejected_response_by_identity(self):
-        rejected = _make_response(ret_code=10001)
+    def test_result_has_order_id(self):
         op = SpyOperation()
-        op._return_value = rejected
-        client = _make_client(op)
-        assert client.create_order(request=_market_request()) is rejected
-
-    def test_does_not_raise_on_nonzero_ret_code(self):
-        op = SpyOperation()
-        op._return_value = _make_response(ret_code=10001)
+        op._return_value = _make_result(order_id="id-42", order_link_id="link-42")
         client = _make_client(op)
         result = client.create_order(request=_market_request())
-        assert result.ret_code == 10001
+        assert result.order_id == "id-42"
+
+    def test_result_has_order_link_id(self):
+        op = SpyOperation()
+        op._return_value = _make_result(order_id="id-1", order_link_id="my-link-id")
+        client = _make_client(op)
+        result = client.create_order(request=_market_request())
+        assert result.order_link_id == "my-link-id"
+
+    def test_does_not_return_bybit_response(self):
+        client = _make_client()
+        result = client.create_order(request=_market_request())
+        assert isinstance(result, BybitCreateOrderResult)
+
+    def test_return_annotation_is_bybit_create_order_result(self):
+        import inspect
+        src = inspect.getsource(BybitDemoClient.create_order)
+        assert "BybitCreateOrderResult" in src
+
+    def test_propagates_value_error_from_operation(self):
+        class RejectedOp(BybitCreateOrderOperation):
+            def __init__(self): pass
+            def execute(self, *, request):
+                raise ValueError("response was rejected: ret_code=10001, ret_msg='Invalid'")
+
+        client = BybitDemoClient(create_order_operation=RejectedOp())
+        with pytest.raises(ValueError, match="ret_code=10001"):
+            client.create_order(request=_market_request())
 
     def test_does_not_inspect_ret_code(self):
         import inspect
@@ -329,15 +347,15 @@ class TestMultipleCalls:
         assert len(op.calls) == 2
 
     def test_no_cached_response(self):
-        r1 = _make_response(ret_code=0)
-        r2 = _make_response(ret_code=10001)
-        responses = [r1, r2]
+        r1 = _make_result(order_id="id-1", order_link_id="link-1")
+        r2 = _make_result(order_id="id-2", order_link_id="link-2")
+        results = [r1, r2]
         idx = [0]
 
         class SequentialOp(BybitCreateOrderOperation):
             def __init__(self): pass
             def execute(self, *, request):
-                r = responses[idx[0]]
+                r = results[idx[0]]
                 idx[0] += 1
                 return r
 
@@ -419,6 +437,16 @@ class TestErrors:
             client.create_order(request=_market_request())
         assert call_count[0] == 1
 
+    def test_propagates_value_error_from_interpreter(self):
+        class InterpreterErrorOp(BybitCreateOrderOperation):
+            def __init__(self): pass
+            def execute(self, *, request):
+                raise ValueError("response was rejected: ret_code=10001, ret_msg='Invalid'")
+
+        client = BybitDemoClient(create_order_operation=InterpreterErrorOp())
+        with pytest.raises(ValueError, match="ret_code=10001"):
+            client.create_order(request=_market_request())
+
 
 # ---------------------------------------------------------------------------
 # 8. Ausencia de responsabilidades adicionales
@@ -470,6 +498,9 @@ class TestNoExtraResponsibilities:
 
     def test_no_header_builder_import(self):
         assert "BybitHeaderBuilder" not in vars(_module)
+
+    def test_does_not_import_bybit_response(self):
+        assert "BybitResponse" not in vars(_module)
 
     def test_whole_suite_unaffected(self):
         from execution_gateway.config import GatewayConfig

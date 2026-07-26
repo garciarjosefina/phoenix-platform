@@ -89,7 +89,8 @@
 | 3.37 | Integración de creación de órdenes en `BybitDemoClient` — 59 tests | `7cc9ea5` |
 | 3.38 | Value object de resultado de creación de orden (`BybitCreateOrderResult`) — 62 tests | `4485485` |
 | 3.39 | Intérprete de respuesta exitosa de creación de orden (`BybitCreateOrderResponseInterpreter`) — 73 tests | pendiente |
-| 3.40 | Integración del intérprete en `BybitCreateOrderOperation` — 76 tests | pendiente |
+| 3.40 | Integración del intérprete en `BybitCreateOrderOperation` — 76 tests | `cd54d06` |
+| 3.41 | Adaptación de `BybitDemoClient.create_order` al resultado interpretado — 64 tests | pendiente |
 
 ### Próximo hito
 
