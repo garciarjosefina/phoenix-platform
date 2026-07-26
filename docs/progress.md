@@ -72,7 +72,7 @@
 | 3.20 | Contrato de autenticación (`BybitAuthentication` + `BybitAuthenticator`) — 38 tests | `30f351a` |
 | 3.21 | Implementación estándar de autenticación (`StandardBybitAuthenticator`) — 40 tests | `2ad9ed4` |
 | 3.22 | Constructor de headers privados (`BybitHeaderBuilder`) — 31 tests | `8be2e77` |
-| 3.23 | Implementación HTTP estándar (`UrllibHttpTransport`) — 45 tests | `(próximo commit)` |
+| 3.23 | Implementación HTTP estándar (`UrllibHttpTransport`) — 45 tests | `f363f55` |
 
 ### Próximo hito
 
