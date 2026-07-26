@@ -85,10 +85,11 @@
 | 3.33 | Endpoint privado de creación de órdenes Bybit Demo (`BYBIT_CREATE_ORDER_ENDPOINT`) — 40 tests | `affd531` |
 | 3.34 | Value object de solicitud de creación de orden Bybit Demo (`BybitCreateOrderRequest`) — 119 tests | `641d916` |
 | 3.35 | Constructor de payload HTTP para creación de orden Bybit Demo (`BybitCreateOrderPayloadBuilder`) — 73 tests | `1ecb45b` |
-| 3.36 | Operación de creación de orden Bybit Demo (`BybitCreateOrderOperation`) — 71 tests | pendiente |
+| 3.36 | Operación de creación de orden Bybit Demo (`BybitCreateOrderOperation`) — 71 tests | `5e5a4e3` |
+| 3.37 | Integración de creación de órdenes en `BybitDemoClient` — 59 tests | pendiente |
 
 ### Próximo hito
 
-> **Nota:** `BybitCreateOrderOperation` compone request → payload → ejecución de endpoint. Todavía no está integrada en `BybitDemoClient`. La respuesta (`BybitResponse`) aún no se interpreta: no se extrae `orderId`, no se verifica `ret_code`, no se lanza excepción por rechazo de Bybit.
+> **Nota:** `BybitDemoClient` expone `create_order(*, request)` y delega en `BybitCreateOrderOperation`. Cancelación, consulta de órdenes y posiciones todavía no existen. La respuesta (`BybitResponse`) aún no se interpreta.
 
 Por definir.
