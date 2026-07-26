@@ -19,6 +19,7 @@ from execution_gateway.hmac_sha256_signer import HmacSha256Signer
 from execution_gateway.bybit_authenticator import BybitAuthentication, BybitAuthenticator
 from execution_gateway.standard_bybit_authenticator import StandardBybitAuthenticator
 from execution_gateway.bybit_header_builder import BybitHeaderBuilder
+from execution_gateway.urllib_http_transport import UrllibHttpTransport
 
 __all__ = [
     "__version__",
@@ -43,4 +44,5 @@ __all__ = [
     "BybitAuthenticator",
     "StandardBybitAuthenticator",
     "BybitHeaderBuilder",
+    "UrllibHttpTransport",
 ]

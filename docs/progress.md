@@ -3,7 +3,7 @@
 ## Estado actual
 
 **Versión:** `v0.1.0` (tag en `main`)
-**Tests:** 580 passing
+**Tests:** 625 passing
 **Rama activa:** `main`
 **Última actualización:** 2026-07-25
 
@@ -71,7 +71,8 @@
 | 3.19 | Implementación estándar (`HmacSha256Signer`) — 22 tests | `cb54d54` |
 | 3.20 | Contrato de autenticación (`BybitAuthentication` + `BybitAuthenticator`) — 38 tests | `30f351a` |
 | 3.21 | Implementación estándar de autenticación (`StandardBybitAuthenticator`) — 40 tests | `2ad9ed4` |
-| 3.22 | Constructor de headers privados (`BybitHeaderBuilder`) — 31 tests | `(próximo commit)` |
+| 3.22 | Constructor de headers privados (`BybitHeaderBuilder`) — 31 tests | `8be2e77` |
+| 3.23 | Implementación HTTP estándar (`UrllibHttpTransport`) — 45 tests | `(próximo commit)` |
 
 ### Próximo hito
 
