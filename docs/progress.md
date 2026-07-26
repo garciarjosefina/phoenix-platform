@@ -3,7 +3,7 @@
 ## Estado actual
 
 **Versión:** `v0.1.0` (tag en `main`)
-**Tests:** 1139 passing
+**Tests:** 1179 passing
 **Rama activa:** `main`
 **Última actualización:** 2026-07-25
 
@@ -81,8 +81,13 @@
 | 3.29 | Servicio de solicitud privada Bybit Demo con respuesta normalizada (`BybitPrivateApi`) — 52 tests | `f54f772` |
 | 3.30 | Value object de endpoint privado Bybit Demo (`BybitEndpoint`) — 58 tests | `42a58cf` |
 | 3.31 | Constructor de URL para endpoints Bybit Demo (`BybitUrlBuilder`) — 52 tests | `3055157` |
-| 3.32 | Ejecutor de endpoint privado Bybit Demo (`BybitEndpointExecutor`) — 67 tests | pendiente |
+| 3.32 | Ejecutor de endpoint privado Bybit Demo (`BybitEndpointExecutor`) — 67 tests | `9ba22f7` |
+| 3.33 | Endpoint privado de creación de órdenes Bybit Demo (`BYBIT_CREATE_ORDER_ENDPOINT`) — 40 tests | pendiente |
 
 ### Próximo hito
+
+> **Nota:** `BYBIT_CREATE_ORDER_ENDPOINT` está declarado. La operación de creación de órdenes todavía **no está implementada**.
+
+
 
 Por definir.
