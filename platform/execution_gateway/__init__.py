@@ -23,6 +23,7 @@ from execution_gateway.urllib_http_transport import UrllibHttpTransport
 from execution_gateway.http_request import HttpRequest
 from execution_gateway.bybit_request_builder import BybitRequestBuilder
 from execution_gateway.http_request_executor import HttpRequestExecutor
+from execution_gateway.bybit_private_request_sender import BybitPrivateRequestSender
 
 __all__ = [
     "__version__",
@@ -51,4 +52,5 @@ __all__ = [
     "HttpRequest",
     "BybitRequestBuilder",
     "HttpRequestExecutor",
+    "BybitPrivateRequestSender",
 ]
