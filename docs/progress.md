@@ -77,7 +77,7 @@
 | 3.25 | Ejecutor de solicitudes HTTP preparadas (`HttpRequestExecutor`) — 47 tests | `2eb8750` |
 | 3.26 | Emisor de solicitudes privadas de Bybit Demo (`BybitPrivateRequestSender`) — 58 tests | `36f30be` |
 | 3.27 | Resultado normalizado de respuesta privada Bybit Demo (`BybitResponse`) — 59 tests | `108772b` |
-| 3.28 | Parser de respuesta privada Bybit Demo (`BybitResponseParser`) — 63 tests | `(próximo commit)` |
+| 3.28 | Parser de respuesta privada Bybit Demo (`BybitResponseParser`) — 63 tests | `1464b56` |
 
 ### Próximo hito
 
