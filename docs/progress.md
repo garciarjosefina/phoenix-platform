@@ -3,7 +3,7 @@
 ## Estado actual
 
 **Versión:** `v0.1.0` (tag en `main`)
-**Tests:** 847 passing
+**Tests:** 910 passing
 **Rama activa:** `main`
 **Última actualización:** 2026-07-25
 
@@ -77,6 +77,7 @@
 | 3.25 | Ejecutor de solicitudes HTTP preparadas (`HttpRequestExecutor`) — 47 tests | `2eb8750` |
 | 3.26 | Emisor de solicitudes privadas de Bybit Demo (`BybitPrivateRequestSender`) — 58 tests | `36f30be` |
 | 3.27 | Resultado normalizado de respuesta privada Bybit Demo (`BybitResponse`) — 59 tests | `108772b` |
+| 3.28 | Parser de respuesta privada Bybit Demo (`BybitResponseParser`) — 63 tests | `(próximo commit)` |
 
 ### Próximo hito
 
