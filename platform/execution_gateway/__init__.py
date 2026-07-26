@@ -11,6 +11,7 @@ from execution_gateway.bybit_client import BybitDemoClient
 from execution_gateway.bybit_gateway import BybitExecutionGateway
 from execution_gateway.http_transport import HttpTransport
 from execution_gateway.json_serializer import JsonSerializer
+from execution_gateway.standard_json_serializer import StandardJsonSerializer
 
 __all__ = [
     "__version__",
@@ -26,4 +27,5 @@ __all__ = [
     "BybitExecutionGateway",
     "HttpTransport",
     "JsonSerializer",
+    "StandardJsonSerializer",
 ]
