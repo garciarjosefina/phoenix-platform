@@ -3,7 +3,7 @@
 ## Estado actual
 
 **Versión:** `v0.1.0` (tag en `main`)
-**Tests:** 344 passing
+**Tests:** 360 passing
 **Rama activa:** `main`
 **Última actualización:** 2026-07-25
 
@@ -62,7 +62,8 @@
 | 3.10 | Contrato del cliente de órdenes Bybit Demo (`BybitDemoClient`) — 14 tests | `333096a` |
 | 3.11 | Adaptador `BybitExecutionGateway` — 19 tests | `40f0c58` |
 | 3.12 | Integración de `BybitExecutionGateway` en la factory — 10 tests nuevos | `282478b` |
-| 3.13 | Contrato de transporte HTTP (`HttpTransport`) — 17 tests | `(próximo commit)` |
+| 3.13 | Contrato de transporte HTTP (`HttpTransport`) — 17 tests | `680280c` |
+| 3.14 | Contrato de serialización JSON (`JsonSerializer`) — 16 tests | `(próximo commit)` |
 
 ### Próximo hito
 
