@@ -15,6 +15,7 @@ from execution_gateway.standard_json_serializer import StandardJsonSerializer
 from execution_gateway.millisecond_clock import MillisecondClock
 from execution_gateway.system_millisecond_clock import SystemMillisecondClock
 from execution_gateway.message_signer import MessageSigner
+from execution_gateway.hmac_sha256_signer import HmacSha256Signer
 
 __all__ = [
     "__version__",
@@ -34,4 +35,5 @@ __all__ = [
     "MillisecondClock",
     "SystemMillisecondClock",
     "MessageSigner",
+    "HmacSha256Signer",
 ]
