@@ -34,6 +34,7 @@ from execution_gateway.bybit_endpoints import BYBIT_CREATE_ORDER_ENDPOINT
 from execution_gateway.bybit_create_order_request import BybitCreateOrderRequest
 from execution_gateway.bybit_create_order_payload_builder import BybitCreateOrderPayloadBuilder
 from execution_gateway.bybit_create_order_operation import BybitCreateOrderOperation
+from execution_gateway.bybit_create_order_result import BybitCreateOrderResult
 
 __all__ = [
     "__version__",
@@ -73,4 +74,5 @@ __all__ = [
     "BybitCreateOrderRequest",
     "BybitCreateOrderPayloadBuilder",
     "BybitCreateOrderOperation",
+    "BybitCreateOrderResult",
 ]

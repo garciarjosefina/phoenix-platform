@@ -99,6 +99,18 @@
 
 ---
 
+## D-013 — `BybitDemoClient` convertido de Protocol a clase concreta con compatibilidad estructural
+
+**Fecha:** 2026-07-26
+**Decisión:** `BybitDemoClient` fue convertido de `Protocol` (con `@runtime_checkable`) a clase concreta con `ABCMeta` y `__subclasshook__`. El `__subclasshook__` replica el comportamiento estructural del Protocol: cualquier clase que defina `place_order` pasa el `isinstance` check, preservando la compatibilidad con `BybitExecutionGateway` y los tests existentes.
+**Razón:** El Hito 3.37 requería agregar un constructor con dependencias y un método concreto (`create_order`). Un Protocol con métodos concretos adicionales los habría incluido en `__protocol_attrs__`, rompiendo los `isinstance` checks existentes. La solución con `ABCMeta` + `__subclasshook__` conserva el comportamiento estructural sin necesidad de modificar archivos fuera del alcance.
+**Consecuencias:**
+- Los tests existentes de `BybitExecutionGateway` y `BybitDemoClient` continúan pasando sin modificación.
+- `BybitDemoClient` puede ahora instanciarse directamente como cliente concreto.
+- La verificación estructural de `place_order` sigue funcionando via `__subclasshook__`.
+
+---
+
 ## D-011 — Bybit Demo como único entorno soportado
 
 **Fecha:** 2026-07-25

@@ -64,7 +64,7 @@ Phoenix Platform es una plataforma modular de trading algorítmico. Está siendo
 - **Python:** 3.14 en local (requisito mínimo: 3.12)
 - **Railway:** proyecto creado, sin servicios desplegados
 - **GitHub:** `garciarjosefina/phoenix-platform`, rama `main`
-- **Fase activa:** Fase 3 — Execution Gateway (Hito 3.37 completado)
+- **Fase activa:** Fase 3 — Execution Gateway (Hito 3.38 completado)
 
 ---
 
@@ -107,9 +107,10 @@ Phoenix Platform es una plataforma modular de trading algorítmico. Está siendo
 - 3.34 — `BybitCreateOrderRequest` (`bybit_create_order_request.py`), 119 tests
 - 3.35 — `BybitCreateOrderPayloadBuilder` (`bybit_create_order_payload_builder.py`), 73 tests
 - 3.36 — `BybitCreateOrderOperation` (`bybit_create_order_operation.py`), 71 tests
-- 3.37 — `BybitDemoClient.create_order` (`bybit_client.py`), 59 tests — fachada sobre `BybitCreateOrderOperation`; respuesta no interpretada; cancelación/consulta/posiciones no implementadas
+- 3.37 — `BybitDemoClient.create_order` (`bybit_client.py`), 59 tests — fachada sobre `BybitCreateOrderOperation`; respuesta no interpretada
+- 3.38 — `BybitCreateOrderResult` (`bybit_create_order_result.py`), 62 tests — value object de salida (`order_id`, `order_link_id`); intérprete aún no existe; `BybitDemoClient.create_order()` continúa devolviendo `BybitResponse`
 
-**Tests totales:** 1501 passing
+**Tests totales:** 1563 passing
 
 **Próximo hito:** por definir.
 

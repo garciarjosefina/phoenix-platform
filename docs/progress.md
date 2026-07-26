@@ -86,10 +86,11 @@
 | 3.34 | Value object de solicitud de creación de orden Bybit Demo (`BybitCreateOrderRequest`) — 119 tests | `641d916` |
 | 3.35 | Constructor de payload HTTP para creación de orden Bybit Demo (`BybitCreateOrderPayloadBuilder`) — 73 tests | `1ecb45b` |
 | 3.36 | Operación de creación de orden Bybit Demo (`BybitCreateOrderOperation`) — 71 tests | `5e5a4e3` |
-| 3.37 | Integración de creación de órdenes en `BybitDemoClient` — 59 tests | pendiente |
+| 3.37 | Integración de creación de órdenes en `BybitDemoClient` — 59 tests | `7cc9ea5` |
+| 3.38 | Value object de resultado de creación de orden (`BybitCreateOrderResult`) — 62 tests | pendiente |
 
 ### Próximo hito
 
-> **Nota:** `BybitDemoClient` expone `create_order(*, request)` y delega en `BybitCreateOrderOperation`. Cancelación, consulta de órdenes y posiciones todavía no existen. La respuesta (`BybitResponse`) aún no se interpreta.
+> **Nota:** `BybitCreateOrderResult` existe como model de salida (`order_id`, `order_link_id`), pero todavía no existe el intérprete que lo construya desde `BybitResponse`. `BybitDemoClient.create_order()` continúa devolviendo `BybitResponse` sin interpretación.
 
 Por definir.
