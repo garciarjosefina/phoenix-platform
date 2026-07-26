@@ -18,6 +18,7 @@ from execution_gateway.message_signer import MessageSigner
 from execution_gateway.hmac_sha256_signer import HmacSha256Signer
 from execution_gateway.bybit_authenticator import BybitAuthentication, BybitAuthenticator
 from execution_gateway.standard_bybit_authenticator import StandardBybitAuthenticator
+from execution_gateway.bybit_header_builder import BybitHeaderBuilder
 
 __all__ = [
     "__version__",
@@ -41,4 +42,5 @@ __all__ = [
     "BybitAuthentication",
     "BybitAuthenticator",
     "StandardBybitAuthenticator",
+    "BybitHeaderBuilder",
 ]
