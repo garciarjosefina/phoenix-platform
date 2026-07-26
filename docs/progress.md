@@ -3,7 +3,7 @@
 ## Estado actual
 
 **Versión:** `v0.1.0` (tag en `main`)
-**Tests:** 471 passing
+**Tests:** 509 passing
 **Rama activa:** `main`
 **Última actualización:** 2026-07-25
 
@@ -68,7 +68,8 @@
 | 3.16 | Contrato de reloj en milisegundos (`MillisecondClock`) — 16 tests | `22a013f` |
 | 3.17 | Implementación estándar (`SystemMillisecondClock`) — 20 tests | `fb4caf6` |
 | 3.18 | Contrato de firma HMAC SHA-256 (`MessageSigner`) — 21 tests | `49be8e9` |
-| 3.19 | Implementación estándar (`HmacSha256Signer`) — 22 tests | `(próximo commit)` |
+| 3.19 | Implementación estándar (`HmacSha256Signer`) — 22 tests | `cb54d54` |
+| 3.20 | Contrato de autenticación (`BybitAuthentication` + `BybitAuthenticator`) — 38 tests | `(próximo commit)` |
 
 ### Próximo hito
 
