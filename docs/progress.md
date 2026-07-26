@@ -87,10 +87,11 @@
 | 3.35 | Constructor de payload HTTP para creación de orden Bybit Demo (`BybitCreateOrderPayloadBuilder`) — 73 tests | `1ecb45b` |
 | 3.36 | Operación de creación de orden Bybit Demo (`BybitCreateOrderOperation`) — 71 tests | `5e5a4e3` |
 | 3.37 | Integración de creación de órdenes en `BybitDemoClient` — 59 tests | `7cc9ea5` |
-| 3.38 | Value object de resultado de creación de orden (`BybitCreateOrderResult`) — 62 tests | pendiente |
+| 3.38 | Value object de resultado de creación de orden (`BybitCreateOrderResult`) — 62 tests | `4485485` |
+| 3.39 | Intérprete de respuesta exitosa de creación de orden (`BybitCreateOrderResponseInterpreter`) — 73 tests | pendiente |
 
 ### Próximo hito
 
-> **Nota:** `BybitCreateOrderResult` existe como model de salida (`order_id`, `order_link_id`), pero todavía no existe el intérprete que lo construya desde `BybitResponse`. `BybitDemoClient.create_order()` continúa devolviendo `BybitResponse` sin interpretación.
+> **Nota:** `BybitCreateOrderResponseInterpreter` interpreta `BybitResponse` con `ret_code == 0` y construye `BybitCreateOrderResult`. Respuestas con `ret_code != 0` lanzan `ValueError` temporalmente. El intérprete todavía no está integrado en `BybitCreateOrderOperation` ni en `BybitDemoClient`. El cliente continúa devolviendo `BybitResponse`.
 
 Por definir.

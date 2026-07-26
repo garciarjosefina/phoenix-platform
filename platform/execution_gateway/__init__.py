@@ -35,6 +35,7 @@ from execution_gateway.bybit_create_order_request import BybitCreateOrderRequest
 from execution_gateway.bybit_create_order_payload_builder import BybitCreateOrderPayloadBuilder
 from execution_gateway.bybit_create_order_operation import BybitCreateOrderOperation
 from execution_gateway.bybit_create_order_result import BybitCreateOrderResult
+from execution_gateway.bybit_create_order_response_interpreter import BybitCreateOrderResponseInterpreter
 
 __all__ = [
     "__version__",
@@ -75,4 +76,5 @@ __all__ = [
     "BybitCreateOrderPayloadBuilder",
     "BybitCreateOrderOperation",
     "BybitCreateOrderResult",
+    "BybitCreateOrderResponseInterpreter",
 ]
