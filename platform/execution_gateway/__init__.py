@@ -32,6 +32,7 @@ from execution_gateway.bybit_url_builder import BybitUrlBuilder
 from execution_gateway.bybit_endpoint_executor import BybitEndpointExecutor
 from execution_gateway.bybit_endpoints import BYBIT_CREATE_ORDER_ENDPOINT
 from execution_gateway.bybit_create_order_request import BybitCreateOrderRequest
+from execution_gateway.bybit_create_order_payload_builder import BybitCreateOrderPayloadBuilder
 
 __all__ = [
     "__version__",
@@ -69,4 +70,5 @@ __all__ = [
     "BybitEndpointExecutor",
     "BYBIT_CREATE_ORDER_ENDPOINT",
     "BybitCreateOrderRequest",
+    "BybitCreateOrderPayloadBuilder",
 ]
