@@ -12,6 +12,7 @@ from execution_gateway.bybit_gateway import BybitExecutionGateway
 from execution_gateway.http_transport import HttpTransport
 from execution_gateway.json_serializer import JsonSerializer
 from execution_gateway.standard_json_serializer import StandardJsonSerializer
+from execution_gateway.millisecond_clock import MillisecondClock
 
 __all__ = [
     "__version__",
@@ -28,4 +29,5 @@ __all__ = [
     "HttpTransport",
     "JsonSerializer",
     "StandardJsonSerializer",
+    "MillisecondClock",
 ]
