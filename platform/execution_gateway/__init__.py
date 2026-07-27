@@ -42,6 +42,7 @@ from execution_gateway.bybit_demo_execution_gateway_factory import create_bybit_
 from execution_gateway.bybit_private_api_factory import create_bybit_private_api
 from execution_gateway.bybit_response_parser_factory import create_bybit_response_parser
 from execution_gateway.bybit_private_request_sender_factory import create_bybit_private_request_sender
+from execution_gateway.bybit_request_builder_factory import create_bybit_request_builder
 
 __all__ = [
     "__version__",
@@ -89,4 +90,5 @@ __all__ = [
     "create_bybit_private_api",
     "create_bybit_response_parser",
     "create_bybit_private_request_sender",
+    "create_bybit_request_builder",
 ]

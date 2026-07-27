@@ -60,11 +60,11 @@ Phoenix Platform es una plataforma modular de trading algorítmico. Está siendo
 ## Estado al 2026-07-27
 
 - **Tag activo:** `v0.1.0`
-- **Tests:** 2134 passing, 0 failing
+- **Tests:** 2222 passing, 0 failing
 - **Python:** 3.14 en local (requisito mínimo: 3.12)
 - **Railway:** proyecto creado, sin servicios desplegados
 - **GitHub:** `garciarjosefina/phoenix-platform`, rama `main`
-- **Fase activa:** Fase 3 — Execution Gateway (Hito 3.49 completado)
+- **Fase activa:** Fase 3 — Execution Gateway (Hito 3.50 completado)
 
 ---
 
@@ -120,8 +120,9 @@ Phoenix Platform es una plataforma modular de trading algorítmico. Está siendo
 - 3.47 — Composition root de `BybitPrivateApi` con dependencias inyectadas (`bybit_private_api_factory.py`), 65 tests — `create_bybit_private_api(*, sender: BybitPrivateRequestSender, response_parser: BybitResponseParser) -> BybitPrivateApi`; recibe `sender` (I/O, transporte, auth, firma) y `response_parser` (puro, contiene `JsonSerializer`) ya construidos; no lee variables de entorno; no recibe API key ni API secret como strings; no construye transporte, sesiones ni credenciales; no firma ni genera headers durante construcción; conserva ambas dependencias por identidad; cada llamada devuelve instancia nueva; validado compositivamente con `create_bybit_demo_execution_gateway`; todavía no existe composition root desde configuración externa; todavía no se validó conexión real con Bybit Demo; cancelación, consultas y posiciones pendientes
 - 3.48 — Composition root de `BybitResponseParser` (`bybit_response_parser_factory.py`), 66 tests — `create_bybit_response_parser(*, serializer: JsonSerializer) -> BybitResponseParser`; recibe `serializer` (Protocol `@runtime_checkable`, acepta compatibilidad estructural) ya construido; conserva dependencia por identidad; no ejecuta parsing durante construcción; no llama a `dumps` ni `loads` al construir; no lee variables de entorno; no construye transporte ni sender; composición del sender privado sigue pendiente; todavía no existe composition root desde configuración externa; todavía no se validó conexión real con Bybit Demo; cancelación, consultas y posiciones pendientes
 - 3.49 — Composition root de `BybitPrivateRequestSender` (`bybit_private_request_sender_factory.py`), 78 tests — `create_bybit_private_request_sender(*, request_builder: BybitRequestBuilder, request_executor: HttpRequestExecutor) -> BybitPrivateRequestSender`; `request_builder` contiene autenticador (secretos, firma) y serializer; `request_executor` contiene transporte (I/O); ambos inyectados ya construidos; conserva ambas dependencias por identidad; no llama al builder ni executor durante construcción; sin retries; error de transporte propagado por identidad sin wrapping; validado compositivamente hasta gateway; composition root de `BybitRequestBuilder` y `HttpRequestExecutor` sigue pendiente; no existe composition root desde configuración externa; no se validó conexión real con Bybit Demo; cancelación, consultas y posiciones pendientes
+- 3.50 — Composition root de `BybitRequestBuilder` (`bybit_request_builder_factory.py`), 88 tests — `create_bybit_request_builder(*, serializer: JsonSerializer, authenticator: BybitAuthenticator, header_builder: BybitHeaderBuilder) -> BybitRequestBuilder`; `serializer` (Protocol estructural, serializa payload); `authenticator` (Protocol estructural, contiene secretos, firma, reloj); `header_builder` (clase concreta, nominal, pura — inyectada para mantener visibilidad del grafo); conserva las tres dependencias por identidad; no serializa, no autentica, no firma, no consulta reloj durante construcción; error de autenticación propagado por identidad sin retry; validado compositivamente hasta gateway; composition root de `HttpRequestExecutor` y `StandardBybitAuthenticator` sigue pendiente; no existe composition root desde configuración externa; no se validó conexión real con Bybit Demo; cancelación, consultas y posiciones pendientes
 
-**Tests totales:** 2134 passing
+**Tests totales:** 2222 passing
 
 **Próximo hito:** por definir.
 
