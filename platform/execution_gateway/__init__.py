@@ -43,6 +43,7 @@ from execution_gateway.bybit_private_api_factory import create_bybit_private_api
 from execution_gateway.bybit_response_parser_factory import create_bybit_response_parser
 from execution_gateway.bybit_private_request_sender_factory import create_bybit_private_request_sender
 from execution_gateway.bybit_request_builder_factory import create_bybit_request_builder
+from execution_gateway.bybit_authenticator_factory import create_bybit_authenticator
 
 __all__ = [
     "__version__",
@@ -91,4 +92,5 @@ __all__ = [
     "create_bybit_response_parser",
     "create_bybit_private_request_sender",
     "create_bybit_request_builder",
+    "create_bybit_authenticator",
 ]
