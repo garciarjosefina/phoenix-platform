@@ -57,14 +57,14 @@ Phoenix Platform es una plataforma modular de trading algorítmico. Está siendo
 
 ---
 
-## Estado al 2026-07-26
+## Estado al 2026-07-27
 
 - **Tag activo:** `v0.1.0`
-- **Tests:** 1862 passing, 0 failing
+- **Tests:** 1925 passing, 0 failing
 - **Python:** 3.14 en local (requisito mínimo: 3.12)
 - **Railway:** proyecto creado, sin servicios desplegados
 - **GitHub:** `garciarjosefina/phoenix-platform`, rama `main`
-- **Fase activa:** Fase 3 — Execution Gateway (Hito 3.45 completado)
+- **Fase activa:** Fase 3 — Execution Gateway (Hito 3.46 completado)
 
 ---
 
@@ -116,8 +116,9 @@ Phoenix Platform es una plataforma modular de trading algorítmico. Está siendo
 - 3.43 — Integración de `BybitApiError` en `BybitCreateOrderResponseInterpreter` (`bybit_create_order_response_interpreter.py`), 80 tests — respuestas rechazadas (`ret_code != 0`) ahora lanzan `BybitApiError(ret_code=..., ret_msg=...)` en lugar de `ValueError`; `ret_code` y `ret_msg` conservados en el error; propagación intacta a través de `BybitCreateOrderOperation` y `BybitDemoClient`; clasificación de errores y retries pendientes
 - 3.44 — Composition root del flujo de creación de órdenes de Bybit Demo (`bybit_demo_client_factory.py`), 54 tests — `create_bybit_demo_client(*, endpoint_executor: BybitEndpointExecutor) -> BybitDemoClient`; ensambla `BybitCreateOrderPayloadBuilder`, `BybitCreateOrderResponseInterpreter`, `BybitCreateOrderOperation` y `BybitDemoClient`; recibe un `BybitEndpointExecutor` ya construido; no construye transporte, sender ni credenciales; el cliente queda listo para creación de órdenes; respuestas rechazadas generan `BybitApiError`; cancelación, consultas y posiciones todavía no implementadas; configuración desde entorno pendiente
 - 3.45 — Prueba integrada de creación de orden desde el gateway público (`test_execution_gateway_create_order_integration.py`), 94 tests — flujo de punta a punta validado en dos secciones: (A) desde `BybitDemoClient.create_order()` con `SpyExecutor`; (B) desde `BybitExecutionGateway.execute()` con `SpyPrivateApi` en la frontera inferior (`BybitPrivateApi`), `BybitEndpointExecutor` y `BybitUrlBuilder` reales; fix de producción mínimo: `place_order()` agregado a `BybitDemoClient` para conectar `BybitExecutionGateway.execute()` → `create_order()` (el `__subclasshook__` ya anticipaba este método); gateway público concreto: `BybitExecutionGateway`; método público probado: `execute()`; frontera simulada en la sección B: `SpyPrivateApi`; recorrido probado desde el gateway, no sólo desde el cliente; no se realizó conexión real con Bybit Demo; transporte, configuración y credenciales productivas continúan pendientes; cancelación, consultas y posiciones no implementadas
+- 3.46 — Composition root del gateway público de Bybit Demo (`bybit_demo_execution_gateway_factory.py`), 63 tests — `create_bybit_demo_execution_gateway(*, private_api: BybitPrivateApi) -> BybitExecutionGateway`; ensambla internamente `BybitUrlBuilder` (URL hardcoded `https://api-demo.bybit.com`), `BybitEndpointExecutor` y delega en `create_bybit_demo_client`; recibe únicamente `private_api` ya construido; no lee entorno, no construye transporte ni credenciales; exportado en `__all__`; cobertura completa: API pública, validación, grafo de dependencias, reutilización de factory, múltiples llamadas, ausencia de ejecución en construcción, flujo integrado éxito+rechazo, ausencia de responsabilidades adicionales
 
-**Tests totales:** 1862 passing
+**Tests totales:** 1925 passing
 
 **Próximo hito:** por definir.
 

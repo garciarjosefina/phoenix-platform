@@ -3,9 +3,9 @@
 ## Estado actual
 
 **Versión:** `v0.1.0` (tag en `main`)
-**Tests:** 1298 passing
+**Tests:** 1925 passing
 **Rama activa:** `main`
-**Última actualización:** 2026-07-25
+**Última actualización:** 2026-07-27
 
 ---
 
@@ -94,7 +94,8 @@
 | 3.42 | Excepción mínima para errores de la API de Bybit (`BybitApiError`) — 61 tests | `64bd6e1` |
 | 3.43 | Integración de `BybitApiError` en `BybitCreateOrderResponseInterpreter` — 80 tests | `262de33` |
 | 3.44 | Composition root del flujo de creación de órdenes de Bybit Demo (`create_bybit_demo_client`) — 54 tests | `ace253b` |
-| 3.45 | Prueba integrada de creación de orden desde el gateway público — 94 tests | pendiente |
+| 3.45 | Prueba integrada de creación de orden desde el gateway público — 94 tests | `a82ad6a` |
+| 3.46 | Composition root del gateway público de Bybit Demo (`create_bybit_demo_execution_gateway`) — 63 tests | pendiente |
 
 ### Próximo hito
 
