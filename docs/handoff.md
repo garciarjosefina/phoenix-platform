@@ -60,11 +60,11 @@ Phoenix Platform es una plataforma modular de trading algorítmico. Está siendo
 ## Estado al 2026-07-27
 
 - **Tag activo:** `v0.1.0`
-- **Tests:** 1990 passing, 0 failing
+- **Tests:** 2056 passing, 0 failing
 - **Python:** 3.14 en local (requisito mínimo: 3.12)
 - **Railway:** proyecto creado, sin servicios desplegados
 - **GitHub:** `garciarjosefina/phoenix-platform`, rama `main`
-- **Fase activa:** Fase 3 — Execution Gateway (Hito 3.47 completado)
+- **Fase activa:** Fase 3 — Execution Gateway (Hito 3.48 completado)
 
 ---
 
@@ -118,8 +118,9 @@ Phoenix Platform es una plataforma modular de trading algorítmico. Está siendo
 - 3.45 — Prueba integrada de creación de orden desde el gateway público (`test_execution_gateway_create_order_integration.py`), 94 tests — flujo de punta a punta validado en dos secciones: (A) desde `BybitDemoClient.create_order()` con `SpyExecutor`; (B) desde `BybitExecutionGateway.execute()` con `SpyPrivateApi` en la frontera inferior (`BybitPrivateApi`), `BybitEndpointExecutor` y `BybitUrlBuilder` reales; fix de producción mínimo: `place_order()` agregado a `BybitDemoClient` para conectar `BybitExecutionGateway.execute()` → `create_order()` (el `__subclasshook__` ya anticipaba este método); gateway público concreto: `BybitExecutionGateway`; método público probado: `execute()`; frontera simulada en la sección B: `SpyPrivateApi`; recorrido probado desde el gateway, no sólo desde el cliente; no se realizó conexión real con Bybit Demo; transporte, configuración y credenciales productivas continúan pendientes; cancelación, consultas y posiciones no implementadas
 - 3.46 — Composition root del gateway público de Bybit Demo (`bybit_demo_execution_gateway_factory.py`), 63 tests — `create_bybit_demo_execution_gateway(*, private_api: BybitPrivateApi) -> BybitExecutionGateway`; ensambla internamente `BybitUrlBuilder` (URL hardcoded `https://api-demo.bybit.com`), `BybitEndpointExecutor` y delega en `create_bybit_demo_client`; recibe únicamente `private_api` ya construido; no lee entorno, no construye transporte ni credenciales; exportado en `__all__`; cobertura completa: API pública, validación, grafo de dependencias, reutilización de factory, múltiples llamadas, ausencia de ejecución en construcción, flujo integrado éxito+rechazo, ausencia de responsabilidades adicionales
 - 3.47 — Composition root de `BybitPrivateApi` con dependencias inyectadas (`bybit_private_api_factory.py`), 65 tests — `create_bybit_private_api(*, sender: BybitPrivateRequestSender, response_parser: BybitResponseParser) -> BybitPrivateApi`; recibe `sender` (I/O, transporte, auth, firma) y `response_parser` (puro, contiene `JsonSerializer`) ya construidos; no lee variables de entorno; no recibe API key ni API secret como strings; no construye transporte, sesiones ni credenciales; no firma ni genera headers durante construcción; conserva ambas dependencias por identidad; cada llamada devuelve instancia nueva; validado compositivamente con `create_bybit_demo_execution_gateway`; todavía no existe composition root desde configuración externa; todavía no se validó conexión real con Bybit Demo; cancelación, consultas y posiciones pendientes
+- 3.48 — Composition root de `BybitResponseParser` (`bybit_response_parser_factory.py`), 66 tests — `create_bybit_response_parser(*, serializer: JsonSerializer) -> BybitResponseParser`; recibe `serializer` (Protocol `@runtime_checkable`, acepta compatibilidad estructural) ya construido; conserva dependencia por identidad; no ejecuta parsing durante construcción; no llama a `dumps` ni `loads` al construir; no lee variables de entorno; no construye transporte ni sender; composición del sender privado sigue pendiente; todavía no existe composition root desde configuración externa; todavía no se validó conexión real con Bybit Demo; cancelación, consultas y posiciones pendientes
 
-**Tests totales:** 1990 passing
+**Tests totales:** 2056 passing
 
 **Próximo hito:** por definir.
 

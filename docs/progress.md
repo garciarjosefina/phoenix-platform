@@ -3,7 +3,7 @@
 ## Estado actual
 
 **Versión:** `v0.1.0` (tag en `main`)
-**Tests:** 1990 passing
+**Tests:** 2056 passing
 **Rama activa:** `main`
 **Última actualización:** 2026-07-27
 
@@ -96,7 +96,8 @@
 | 3.44 | Composition root del flujo de creación de órdenes de Bybit Demo (`create_bybit_demo_client`) — 54 tests | `ace253b` |
 | 3.45 | Prueba integrada de creación de orden desde el gateway público — 94 tests | `a82ad6a` |
 | 3.46 | Composition root del gateway público de Bybit Demo (`create_bybit_demo_execution_gateway`) — 63 tests | `ff292a4` |
-| 3.47 | Composition root de `BybitPrivateApi` con dependencias inyectadas (`create_bybit_private_api`) — 65 tests | pendiente |
+| 3.47 | Composition root de `BybitPrivateApi` con dependencias inyectadas (`create_bybit_private_api`) — 65 tests | `2725245` |
+| 3.48 | Composition root de `BybitResponseParser` (`create_bybit_response_parser`) — 66 tests | pendiente |
 
 ### Próximo hito
 
