@@ -60,11 +60,11 @@ Phoenix Platform es una plataforma modular de trading algorítmico. Está siendo
 ## Estado al 2026-07-27
 
 - **Tag activo:** `v0.1.0`
-- **Tests:** 2056 passing, 0 failing
+- **Tests:** 2134 passing, 0 failing
 - **Python:** 3.14 en local (requisito mínimo: 3.12)
 - **Railway:** proyecto creado, sin servicios desplegados
 - **GitHub:** `garciarjosefina/phoenix-platform`, rama `main`
-- **Fase activa:** Fase 3 — Execution Gateway (Hito 3.48 completado)
+- **Fase activa:** Fase 3 — Execution Gateway (Hito 3.49 completado)
 
 ---
 
@@ -119,8 +119,9 @@ Phoenix Platform es una plataforma modular de trading algorítmico. Está siendo
 - 3.46 — Composition root del gateway público de Bybit Demo (`bybit_demo_execution_gateway_factory.py`), 63 tests — `create_bybit_demo_execution_gateway(*, private_api: BybitPrivateApi) -> BybitExecutionGateway`; ensambla internamente `BybitUrlBuilder` (URL hardcoded `https://api-demo.bybit.com`), `BybitEndpointExecutor` y delega en `create_bybit_demo_client`; recibe únicamente `private_api` ya construido; no lee entorno, no construye transporte ni credenciales; exportado en `__all__`; cobertura completa: API pública, validación, grafo de dependencias, reutilización de factory, múltiples llamadas, ausencia de ejecución en construcción, flujo integrado éxito+rechazo, ausencia de responsabilidades adicionales
 - 3.47 — Composition root de `BybitPrivateApi` con dependencias inyectadas (`bybit_private_api_factory.py`), 65 tests — `create_bybit_private_api(*, sender: BybitPrivateRequestSender, response_parser: BybitResponseParser) -> BybitPrivateApi`; recibe `sender` (I/O, transporte, auth, firma) y `response_parser` (puro, contiene `JsonSerializer`) ya construidos; no lee variables de entorno; no recibe API key ni API secret como strings; no construye transporte, sesiones ni credenciales; no firma ni genera headers durante construcción; conserva ambas dependencias por identidad; cada llamada devuelve instancia nueva; validado compositivamente con `create_bybit_demo_execution_gateway`; todavía no existe composition root desde configuración externa; todavía no se validó conexión real con Bybit Demo; cancelación, consultas y posiciones pendientes
 - 3.48 — Composition root de `BybitResponseParser` (`bybit_response_parser_factory.py`), 66 tests — `create_bybit_response_parser(*, serializer: JsonSerializer) -> BybitResponseParser`; recibe `serializer` (Protocol `@runtime_checkable`, acepta compatibilidad estructural) ya construido; conserva dependencia por identidad; no ejecuta parsing durante construcción; no llama a `dumps` ni `loads` al construir; no lee variables de entorno; no construye transporte ni sender; composición del sender privado sigue pendiente; todavía no existe composition root desde configuración externa; todavía no se validó conexión real con Bybit Demo; cancelación, consultas y posiciones pendientes
+- 3.49 — Composition root de `BybitPrivateRequestSender` (`bybit_private_request_sender_factory.py`), 78 tests — `create_bybit_private_request_sender(*, request_builder: BybitRequestBuilder, request_executor: HttpRequestExecutor) -> BybitPrivateRequestSender`; `request_builder` contiene autenticador (secretos, firma) y serializer; `request_executor` contiene transporte (I/O); ambos inyectados ya construidos; conserva ambas dependencias por identidad; no llama al builder ni executor durante construcción; sin retries; error de transporte propagado por identidad sin wrapping; validado compositivamente hasta gateway; composition root de `BybitRequestBuilder` y `HttpRequestExecutor` sigue pendiente; no existe composition root desde configuración externa; no se validó conexión real con Bybit Demo; cancelación, consultas y posiciones pendientes
 
-**Tests totales:** 2056 passing
+**Tests totales:** 2134 passing
 
 **Próximo hito:** por definir.
 
