@@ -60,11 +60,11 @@ Phoenix Platform es una plataforma modular de trading algorítmico. Está siendo
 ## Estado al 2026-07-26
 
 - **Tag activo:** `v0.1.0`
-- **Tests:** 1714 passing, 0 failing
+- **Tests:** 1768 passing, 0 failing
 - **Python:** 3.14 en local (requisito mínimo: 3.12)
 - **Railway:** proyecto creado, sin servicios desplegados
 - **GitHub:** `garciarjosefina/phoenix-platform`, rama `main`
-- **Fase activa:** Fase 3 — Execution Gateway (Hito 3.43 completado)
+- **Fase activa:** Fase 3 — Execution Gateway (Hito 3.44 completado)
 
 ---
 
@@ -114,8 +114,9 @@ Phoenix Platform es una plataforma modular de trading algorítmico. Está siendo
 - 3.41 — Adaptación de `BybitDemoClient.create_order` al resultado interpretado (`bybit_client.py`), 64 tests — anotación de retorno cambiada de `BybitResponse` a `BybitCreateOrderResult`; import de `BybitResponse` eliminado; cadena pública completa: `BybitCreateOrderRequest → BybitDemoClient.create_order() → BybitCreateOrderOperation.execute() → BybitCreateOrderResult`; respuestas rechazadas (`ret_code != 0`) generan `ValueError` propagado desde el intérprete a través de la operación; cancelación, consultas y posiciones todavía no implementadas
 - 3.42 — Excepción mínima para errores de la API de Bybit (`bybit_api_error.py`), 61 tests — `BybitApiError(Exception)` con campos `ret_code: int` y `ret_msg: str`; keyword-only; mensaje determinista `"Bybit API error {ret_code}: {ret_msg}"`; clasificación de errores y retries pendientes
 - 3.43 — Integración de `BybitApiError` en `BybitCreateOrderResponseInterpreter` (`bybit_create_order_response_interpreter.py`), 80 tests — respuestas rechazadas (`ret_code != 0`) ahora lanzan `BybitApiError(ret_code=..., ret_msg=...)` en lugar de `ValueError`; `ret_code` y `ret_msg` conservados en el error; propagación intacta a través de `BybitCreateOrderOperation` y `BybitDemoClient`; clasificación de errores y retries pendientes
+- 3.44 — Composition root del flujo de creación de órdenes de Bybit Demo (`bybit_demo_client_factory.py`), 54 tests — `create_bybit_demo_client(*, endpoint_executor: BybitEndpointExecutor) -> BybitDemoClient`; ensambla `BybitCreateOrderPayloadBuilder`, `BybitCreateOrderResponseInterpreter`, `BybitCreateOrderOperation` y `BybitDemoClient`; recibe un `BybitEndpointExecutor` ya construido; no construye transporte, sender ni credenciales; el cliente queda listo para creación de órdenes; respuestas rechazadas generan `BybitApiError`; cancelación, consultas y posiciones todavía no implementadas; configuración desde entorno pendiente
 
-**Tests totales:** 1714 passing
+**Tests totales:** 1768 passing
 
 **Próximo hito:** por definir.
 
