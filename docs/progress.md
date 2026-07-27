@@ -3,7 +3,7 @@
 ## Estado actual
 
 **Versión:** `v0.1.0` (tag en `main`)
-**Tests:** 2319 passing
+**Tests:** 2404 passing
 **Rama activa:** `main`
 **Última actualización:** 2026-07-27
 
@@ -100,7 +100,8 @@
 | 3.48 | Composition root de `BybitResponseParser` (`create_bybit_response_parser`) — 66 tests | `937bd82` |
 | 3.49 | Composition root de `BybitPrivateRequestSender` (`create_bybit_private_request_sender`) — 78 tests | `96dd94b` |
 | 3.50 | Composition root de `BybitRequestBuilder` (`create_bybit_request_builder`) — 88 tests | `7e2cdab` |
-| 3.51 | Composition root de `StandardBybitAuthenticator` (`create_bybit_authenticator`) — 97 tests | pendiente |
+| 3.51 | Composition root de `StandardBybitAuthenticator` (`create_bybit_authenticator`) — 97 tests | `4201e20` |
+| 3.52 | Composition root de `HttpRequestExecutor` (`create_http_request_executor`) — 85 tests | pendiente |
 
 ### Próximo hito
 
