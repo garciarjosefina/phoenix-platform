@@ -1,5 +1,6 @@
 import pytest
 
+from execution_gateway.bybit_api_error import BybitApiError
 from execution_gateway.bybit_create_order_response_interpreter import (
     BybitCreateOrderResponseInterpreter,
 )
@@ -62,6 +63,9 @@ class TestImport:
         interp = _interp()
         public = {n for n in dir(interp) if not n.startswith("_")}
         assert public == {"interpret"}
+
+    def test_interpreter_uses_bybit_api_error(self):
+        assert "BybitApiError" in vars(_module)
 
 
 # ---------------------------------------------------------------------------
@@ -158,31 +162,31 @@ class TestSuccessfulResponse:
 # ---------------------------------------------------------------------------
 
 class TestRejectedResponse:
-    def test_positive_ret_code_raises_value_error(self):
-        with pytest.raises(ValueError):
+    def test_positive_ret_code_raises_bybit_api_error(self):
+        with pytest.raises(BybitApiError):
             _interp().interpret(response=_make_response(ret_code=10001))
 
-    def test_negative_ret_code_raises_value_error(self):
-        with pytest.raises(ValueError):
+    def test_negative_ret_code_raises_bybit_api_error(self):
+        with pytest.raises(BybitApiError):
             _interp().interpret(response=_make_response(ret_code=-1))
 
-    def test_ret_code_1_raises_value_error(self):
-        with pytest.raises(ValueError):
+    def test_ret_code_1_raises_bybit_api_error(self):
+        with pytest.raises(BybitApiError):
             _interp().interpret(response=_make_response(ret_code=1))
 
     def test_does_not_construct_result_on_rejection(self):
-        with pytest.raises(ValueError):
+        with pytest.raises(BybitApiError):
             _interp().interpret(response=_make_response(ret_code=10001, result=None))
 
     def test_does_not_access_result_before_checking_ret_code(self):
         sentinel = object()
         r = _make_response(ret_code=10001, result=sentinel)
-        with pytest.raises(ValueError):
+        with pytest.raises(BybitApiError):
             _interp().interpret(response=r)
 
     def test_no_result_mapping_when_ret_code_nonzero(self):
         r = _make_response(ret_code=99, result={"orderId": "x", "orderLinkId": "y"})
-        with pytest.raises(ValueError):
+        with pytest.raises(BybitApiError):
             _interp().interpret(response=r)
 
     def test_no_retry_on_rejection(self):
@@ -195,12 +199,53 @@ class TestRejectedResponse:
 
         BybitCreateOrderResponseInterpreter.interpret = counting_interpret
         try:
-            with pytest.raises(ValueError):
+            with pytest.raises(BybitApiError):
                 _interp().interpret(response=_make_response(ret_code=10001))
         finally:
             BybitCreateOrderResponseInterpreter.interpret = original_interpret
 
         assert count[0] == 1
+
+    def test_ret_code_conserved_in_error(self):
+        r = _make_response(ret_code=10001, ret_msg="some error")
+        with pytest.raises(BybitApiError) as exc_info:
+            _interp().interpret(response=r)
+        assert exc_info.value.ret_code == 10001
+
+    def test_ret_msg_conserved_in_error(self):
+        r = _make_response(ret_code=10001, ret_msg="Request parameter error")
+        with pytest.raises(BybitApiError) as exc_info:
+            _interp().interpret(response=r)
+        assert exc_info.value.ret_msg == "Request parameter error"
+
+    def test_error_message_format(self):
+        r = _make_response(ret_code=10001, ret_msg="Request parameter error")
+        with pytest.raises(BybitApiError) as exc_info:
+            _interp().interpret(response=r)
+        assert str(exc_info.value) == "Bybit API error 10001: Request parameter error"
+
+    def test_empty_ret_msg_conserved(self):
+        r = _make_response(ret_code=10001, ret_msg="")
+        with pytest.raises(BybitApiError) as exc_info:
+            _interp().interpret(response=r)
+        assert exc_info.value.ret_msg == ""
+
+    def test_bybit_api_error_caught_as_exception(self):
+        r = _make_response(ret_code=10001, ret_msg="error")
+        try:
+            _interp().interpret(response=r)
+        except Exception as e:
+            assert isinstance(e, BybitApiError)
+        else:
+            pytest.fail("Expected BybitApiError to be raised")
+
+    def test_not_raises_value_error(self):
+        r = _make_response(ret_code=10001, ret_msg="error")
+        with pytest.raises(BybitApiError):
+            try:
+                _interp().interpret(response=r)
+            except ValueError:
+                pytest.fail("must not raise ValueError for rejected responses")
 
 
 # ---------------------------------------------------------------------------

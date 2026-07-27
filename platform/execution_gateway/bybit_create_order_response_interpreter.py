@@ -1,5 +1,6 @@
 from collections.abc import Mapping
 
+from execution_gateway.bybit_api_error import BybitApiError
 from execution_gateway.bybit_create_order_result import BybitCreateOrderResult
 from execution_gateway.bybit_response import BybitResponse
 
@@ -12,8 +13,9 @@ class BybitCreateOrderResponseInterpreter:
             )
 
         if response.ret_code != 0:
-            raise ValueError(
-                f"response was rejected: ret_code={response.ret_code}, ret_msg={response.ret_msg!r}"
+            raise BybitApiError(
+                ret_code=response.ret_code,
+                ret_msg=response.ret_msg,
             )
 
         result = response.result

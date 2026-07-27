@@ -2,6 +2,7 @@ from decimal import Decimal
 
 import pytest
 
+from execution_gateway.bybit_api_error import BybitApiError
 from execution_gateway.bybit_client import BybitDemoClient
 from execution_gateway.bybit_create_order_operation import BybitCreateOrderOperation
 from execution_gateway.bybit_create_order_request import BybitCreateOrderRequest
@@ -302,15 +303,16 @@ class TestResponse:
         src = inspect.getsource(BybitDemoClient.create_order)
         assert "BybitCreateOrderResult" in src
 
-    def test_propagates_value_error_from_operation(self):
+    def test_propagates_bybit_api_error_from_operation(self):
         class RejectedOp(BybitCreateOrderOperation):
             def __init__(self): pass
             def execute(self, *, request):
-                raise ValueError("response was rejected: ret_code=10001, ret_msg='Invalid'")
+                raise BybitApiError(ret_code=10001, ret_msg="Invalid")
 
         client = BybitDemoClient(create_order_operation=RejectedOp())
-        with pytest.raises(ValueError, match="ret_code=10001"):
+        with pytest.raises(BybitApiError) as exc_info:
             client.create_order(request=_market_request())
+        assert exc_info.value.ret_code == 10001
 
     def test_does_not_inspect_ret_code(self):
         import inspect
@@ -437,15 +439,16 @@ class TestErrors:
             client.create_order(request=_market_request())
         assert call_count[0] == 1
 
-    def test_propagates_value_error_from_interpreter(self):
+    def test_propagates_bybit_api_error_from_interpreter(self):
         class InterpreterErrorOp(BybitCreateOrderOperation):
             def __init__(self): pass
             def execute(self, *, request):
-                raise ValueError("response was rejected: ret_code=10001, ret_msg='Invalid'")
+                raise BybitApiError(ret_code=10001, ret_msg="Invalid")
 
         client = BybitDemoClient(create_order_operation=InterpreterErrorOp())
-        with pytest.raises(ValueError, match="ret_code=10001"):
+        with pytest.raises(BybitApiError) as exc_info:
             client.create_order(request=_market_request())
+        assert exc_info.value.ret_code == 10001
 
 
 # ---------------------------------------------------------------------------
