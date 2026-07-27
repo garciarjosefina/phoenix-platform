@@ -94,7 +94,7 @@
 | 3.42 | Excepción mínima para errores de la API de Bybit (`BybitApiError`) — 61 tests | `64bd6e1` |
 | 3.43 | Integración de `BybitApiError` en `BybitCreateOrderResponseInterpreter` — 80 tests | `262de33` |
 | 3.44 | Composition root del flujo de creación de órdenes de Bybit Demo (`create_bybit_demo_client`) — 54 tests | `ace253b` |
-| 3.45 | Prueba integrada de creación de orden desde el gateway público — 52 tests | pendiente |
+| 3.45 | Prueba integrada de creación de orden desde el gateway público — 94 tests | pendiente |
 
 ### Próximo hito
 

@@ -29,3 +29,11 @@ class BybitDemoClient(metaclass=ABCMeta):
                 f"got: {type(request).__name__}"
             )
         return self._create_order_operation.execute(request=request)
+
+    def place_order(self, request: BybitCreateOrderRequest) -> BybitCreateOrderResult:
+        if not isinstance(request, BybitCreateOrderRequest):
+            raise TypeError(
+                f"request must be BybitCreateOrderRequest, "
+                f"got: {type(request).__name__}"
+            )
+        return self.create_order(request=request)
