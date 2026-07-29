@@ -50,6 +50,7 @@ from execution_gateway.json_serializer_factory import create_json_serializer
 from execution_gateway.bybit_header_builder_factory import create_bybit_header_builder
 from execution_gateway.bybit_demo_credentials_factory import create_bybit_demo_credentials
 from execution_gateway.message_signer_factory import create_message_signer
+from execution_gateway.millisecond_clock_factory import create_millisecond_clock
 
 __all__ = [
     "__version__",
@@ -105,4 +106,5 @@ __all__ = [
     "create_bybit_header_builder",
     "create_bybit_demo_credentials",
     "create_message_signer",
+    "create_millisecond_clock",
 ]

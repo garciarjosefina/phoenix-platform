@@ -3,7 +3,7 @@
 ## Estado actual
 
 **Versión:** `v0.1.0` (tag en `main`)
-**Tests:** 2798 passing
+**Tests:** 2884 passing
 **Rama activa:** `main`
 **Última actualización:** 2026-07-29
 
@@ -106,7 +106,8 @@
 | 3.54 | Composition root del serializer JSON productivo (`create_json_serializer`) — 76 tests | `a7a67cc` |
 | 3.55 | Composition root de `BybitHeaderBuilder` (`create_bybit_header_builder`) — 64 tests | `b7c3f02` |
 | 3.56 | Composition root de `BybitDemoCredentials` desde secretos explícitos (`create_bybit_demo_credentials`) — 107 tests | `713daf6` |
-| 3.57 | Composition root del `MessageSigner` productivo (`create_message_signer`) — 85 tests | pendiente |
+| 3.57 | Composition root del `MessageSigner` productivo (`create_message_signer`) — 85 tests | `1051ebe` |
+| 3.58 | Composition root del `MillisecondClock` productivo (`create_millisecond_clock`) — 86 tests | pendiente |
 
 ### Próximo hito
 
