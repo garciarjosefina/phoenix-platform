@@ -57,14 +57,14 @@ Phoenix Platform es una plataforma modular de trading algorítmico. Está siendo
 
 ---
 
-## Estado al 2026-07-27
+## Estado al 2026-07-29
 
 - **Tag activo:** `v0.1.0`
-- **Tests:** 2542 passing, 0 failing
+- **Tests:** 2606 passing, 0 failing
 - **Python:** 3.14 en local (requisito mínimo: 3.12)
 - **Railway:** proyecto creado, sin servicios desplegados
 - **GitHub:** `garciarjosefina/phoenix-platform`, rama `main`
-- **Fase activa:** Fase 3 — Execution Gateway (Hito 3.54 completado)
+- **Fase activa:** Fase 3 — Execution Gateway (Hito 3.55 completado)
 
 ---
 
@@ -125,8 +125,9 @@ Phoenix Platform es una plataforma modular de trading algorítmico. Está siendo
 - 3.52 — Composition root de `HttpRequestExecutor` (`http_request_executor_factory.py`), 85 tests — `create_http_request_executor(*, transport: HttpTransport, timeout_seconds: float) -> HttpRequestExecutor`; `transport` (Protocol estructural `@runtime_checkable`, acepta cualquier objeto con `post(*, url, headers, body, timeout_seconds)`); `timeout_seconds` int o float > 0, bool rechazado; conserva `transport` por identidad; conserva `timeout_seconds` exactamente; no llama al transporte durante construcción; no abre conexiones ni crea sesiones; errores del transporte propagados por identidad sin wrapping ni retry; validado compositivamente hasta gateway completo; no existe composition root desde configuración externa; no se validó conexión real con Bybit Demo; cancelación, consultas y posiciones pendientes
 - 3.53 — Composition root del transporte HTTP productivo (`http_transport_factory.py`), 62 tests — `create_http_transport() -> UrllibHttpTransport`; sin parámetros: `UrllibHttpTransport.__init__` no recibe dependencias (usa `urllib.request.urlopen` directamente en `post()`); implementación concreta única que satisface `HttpTransport`; no llama a `urlopen` durante construcción; no abre conexiones ni resuelve DNS; no crea cliente ni sesión; errores de red propagados sin retry; validado compositivamente hasta gateway completo; no existe composition root desde configuración externa; no se validó conexión real con Bybit Demo; cancelación, consultas y posiciones pendientes
 - 3.54 — Composition root del serializer JSON productivo (`json_serializer_factory.py`), 76 tests — `create_json_serializer() -> StandardJsonSerializer`; sin parámetros: `StandardJsonSerializer.__init__` no recibe dependencias; delega `dumps` a `json.dumps` y `loads` a `json.loads` sin opciones especiales; satisface `JsonSerializer` Protocol; cada llamada crea instancia nueva (sin singleton); puede compartirse por identidad entre `create_bybit_request_builder` y `create_bybit_response_parser`; no llama a `dumps` ni `loads` durante construcción; no realiza I/O; no lee variables de entorno; no existe composition root desde configuración externa; no se validó conexión real con Bybit Demo; cancelación, consultas y posiciones pendientes
+- 3.55 — Composition root de `BybitHeaderBuilder` (`bybit_header_builder_factory.py`), 64 tests — `create_bybit_header_builder() -> BybitHeaderBuilder`; sin parámetros: `BybitHeaderBuilder.__init__` no recibe dependencias; `build(*, authentication: BybitAuthentication)` produce 5 headers (`X-BAPI-API-KEY`, `X-BAPI-TIMESTAMP`, `X-BAPI-RECV-WINDOW`, `X-BAPI-SIGN`, `Content-Type: application/json`); validación nominal de `BybitAuthentication`; cada llamada crea instancia nueva; no construye headers durante construcción; no realiza I/O; no lee variables de entorno; validado compositivamente con `create_bybit_request_builder` hasta gateway completo; no existe composition root desde configuración externa; no se validó conexión real con Bybit Demo; cancelación, consultas y posiciones pendientes
 
-**Tests totales:** 2542 passing
+**Tests totales:** 2606 passing
 
 **Próximo hito:** por definir.
 

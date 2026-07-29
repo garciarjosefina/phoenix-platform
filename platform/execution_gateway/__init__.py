@@ -47,6 +47,7 @@ from execution_gateway.bybit_authenticator_factory import create_bybit_authentic
 from execution_gateway.http_request_executor_factory import create_http_request_executor
 from execution_gateway.http_transport_factory import create_http_transport
 from execution_gateway.json_serializer_factory import create_json_serializer
+from execution_gateway.bybit_header_builder_factory import create_bybit_header_builder
 
 __all__ = [
     "__version__",
@@ -99,4 +100,5 @@ __all__ = [
     "create_http_request_executor",
     "create_http_transport",
     "create_json_serializer",
+    "create_bybit_header_builder",
 ]

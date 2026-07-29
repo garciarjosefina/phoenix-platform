@@ -3,9 +3,9 @@
 ## Estado actual
 
 **Versión:** `v0.1.0` (tag en `main`)
-**Tests:** 2542 passing
+**Tests:** 2606 passing
 **Rama activa:** `main`
-**Última actualización:** 2026-07-27
+**Última actualización:** 2026-07-29
 
 ---
 
@@ -103,7 +103,8 @@
 | 3.51 | Composition root de `StandardBybitAuthenticator` (`create_bybit_authenticator`) — 97 tests | `4201e20` |
 | 3.52 | Composition root de `HttpRequestExecutor` (`create_http_request_executor`) — 85 tests | `215ea0b` |
 | 3.53 | Composition root del transporte HTTP productivo (`create_http_transport`) — 62 tests | `409f6bc` |
-| 3.54 | Composition root del serializer JSON productivo (`create_json_serializer`) — 76 tests | pendiente |
+| 3.54 | Composition root del serializer JSON productivo (`create_json_serializer`) — 76 tests | `a7a67cc` |
+| 3.55 | Composition root de `BybitHeaderBuilder` (`create_bybit_header_builder`) — 64 tests | pendiente |
 
 ### Próximo hito
 
