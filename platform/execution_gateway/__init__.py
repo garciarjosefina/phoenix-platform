@@ -49,6 +49,7 @@ from execution_gateway.http_transport_factory import create_http_transport
 from execution_gateway.json_serializer_factory import create_json_serializer
 from execution_gateway.bybit_header_builder_factory import create_bybit_header_builder
 from execution_gateway.bybit_demo_credentials_factory import create_bybit_demo_credentials
+from execution_gateway.message_signer_factory import create_message_signer
 
 __all__ = [
     "__version__",
@@ -103,4 +104,5 @@ __all__ = [
     "create_json_serializer",
     "create_bybit_header_builder",
     "create_bybit_demo_credentials",
+    "create_message_signer",
 ]
