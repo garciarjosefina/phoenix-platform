@@ -45,6 +45,7 @@ from execution_gateway.bybit_private_request_sender_factory import create_bybit_
 from execution_gateway.bybit_request_builder_factory import create_bybit_request_builder
 from execution_gateway.bybit_authenticator_factory import create_bybit_authenticator
 from execution_gateway.http_request_executor_factory import create_http_request_executor
+from execution_gateway.http_transport_factory import create_http_transport
 
 __all__ = [
     "__version__",
@@ -95,4 +96,5 @@ __all__ = [
     "create_bybit_request_builder",
     "create_bybit_authenticator",
     "create_http_request_executor",
+    "create_http_transport",
 ]

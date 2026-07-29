@@ -60,11 +60,11 @@ Phoenix Platform es una plataforma modular de trading algorítmico. Está siendo
 ## Estado al 2026-07-27
 
 - **Tag activo:** `v0.1.0`
-- **Tests:** 2404 passing, 0 failing
+- **Tests:** 2466 passing, 0 failing
 - **Python:** 3.14 en local (requisito mínimo: 3.12)
 - **Railway:** proyecto creado, sin servicios desplegados
 - **GitHub:** `garciarjosefina/phoenix-platform`, rama `main`
-- **Fase activa:** Fase 3 — Execution Gateway (Hito 3.52 completado)
+- **Fase activa:** Fase 3 — Execution Gateway (Hito 3.53 completado)
 
 ---
 
@@ -123,8 +123,9 @@ Phoenix Platform es una plataforma modular de trading algorítmico. Está siendo
 - 3.50 — Composition root de `BybitRequestBuilder` (`bybit_request_builder_factory.py`), 88 tests — `create_bybit_request_builder(*, serializer: JsonSerializer, authenticator: BybitAuthenticator, header_builder: BybitHeaderBuilder) -> BybitRequestBuilder`; `serializer` (Protocol estructural, serializa payload); `authenticator` (Protocol estructural, contiene secretos, firma, reloj); `header_builder` (clase concreta, nominal, pura — inyectada para mantener visibilidad del grafo); conserva las tres dependencias por identidad; no serializa, no autentica, no firma, no consulta reloj durante construcción; error de autenticación propagado por identidad sin retry; validado compositivamente hasta gateway; composition root de `HttpRequestExecutor` y `StandardBybitAuthenticator` sigue pendiente; no existe composition root desde configuración externa; no se validó conexión real con Bybit Demo; cancelación, consultas y posiciones pendientes
 - 3.51 — Composition root de `StandardBybitAuthenticator` (`bybit_authenticator_factory.py`), 97 tests — `create_bybit_authenticator(*, credentials: BybitDemoCredentials, clock: MillisecondClock, signer: MessageSigner, recv_window_ms: int) -> StandardBybitAuthenticator`; `credentials` nominal (`BybitDemoCredentials`); `clock` (Protocol estructural, implementación mínima: `now_ms()`); `signer` (Protocol estructural, implementación mínima: `sign(*, secret, message)`); `recv_window_ms` int > 0, bool rechazado; no llama a clock ni signer durante construcción; error de clock y signer propagado por identidad; satisface `BybitAuthenticator` Protocol; validado compositivamente con `create_bybit_request_builder` hasta gateway; composition root de `HttpRequestExecutor` sigue pendiente; no existe composition root desde configuración externa; no se validó conexión real con Bybit Demo; cancelación, consultas y posiciones pendientes
 - 3.52 — Composition root de `HttpRequestExecutor` (`http_request_executor_factory.py`), 85 tests — `create_http_request_executor(*, transport: HttpTransport, timeout_seconds: float) -> HttpRequestExecutor`; `transport` (Protocol estructural `@runtime_checkable`, acepta cualquier objeto con `post(*, url, headers, body, timeout_seconds)`); `timeout_seconds` int o float > 0, bool rechazado; conserva `transport` por identidad; conserva `timeout_seconds` exactamente; no llama al transporte durante construcción; no abre conexiones ni crea sesiones; errores del transporte propagados por identidad sin wrapping ni retry; validado compositivamente hasta gateway completo; no existe composition root desde configuración externa; no se validó conexión real con Bybit Demo; cancelación, consultas y posiciones pendientes
+- 3.53 — Composition root del transporte HTTP productivo (`http_transport_factory.py`), 62 tests — `create_http_transport() -> UrllibHttpTransport`; sin parámetros: `UrllibHttpTransport.__init__` no recibe dependencias (usa `urllib.request.urlopen` directamente en `post()`); implementación concreta única que satisface `HttpTransport`; no llama a `urlopen` durante construcción; no abre conexiones ni resuelve DNS; no crea cliente ni sesión; errores de red propagados sin retry; validado compositivamente hasta gateway completo; no existe composition root desde configuración externa; no se validó conexión real con Bybit Demo; cancelación, consultas y posiciones pendientes
 
-**Tests totales:** 2404 passing
+**Tests totales:** 2466 passing
 
 **Próximo hito:** por definir.
 
