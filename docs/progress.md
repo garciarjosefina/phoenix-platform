@@ -3,7 +3,7 @@
 ## Estado actual
 
 **Versión:** `v0.1.0` (tag en `main`)
-**Tests:** 2884 passing
+**Tests:** 2974 passing
 **Rama activa:** `main`
 **Última actualización:** 2026-07-29
 
@@ -107,7 +107,8 @@
 | 3.55 | Composition root de `BybitHeaderBuilder` (`create_bybit_header_builder`) — 64 tests | `b7c3f02` |
 | 3.56 | Composition root de `BybitDemoCredentials` desde secretos explícitos (`create_bybit_demo_credentials`) — 107 tests | `713daf6` |
 | 3.57 | Composition root del `MessageSigner` productivo (`create_message_signer`) — 85 tests | `1051ebe` |
-| 3.58 | Composition root del `MillisecondClock` productivo (`create_millisecond_clock`) — 86 tests | pendiente |
+| 3.58 | Composition root del `MillisecondClock` productivo (`create_millisecond_clock`) — 86 tests | `4cfb461` |
+| 3.59 | Composition root del recv window de Bybit desde valor explícito (`create_bybit_recv_window_ms`) — 90 tests | pendiente |
 
 ### Próximo hito
 
