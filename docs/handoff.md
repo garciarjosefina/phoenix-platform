@@ -64,7 +64,7 @@ Phoenix Platform es una plataforma modular de trading algorítmico. Está siendo
 - **Python:** 3.14 en local (requisito mínimo: 3.12)
 - **Railway:** proyecto creado, sin servicios desplegados
 - **GitHub:** `garciarjosefina/phoenix-platform`, rama `main`
-- **Fase activa:** Fase 3 — Execution Gateway (Hito 3.55 completado)
+- **Fase activa:** Fase 3 — Execution Gateway (Hito 3.56 completado)
 
 ---
 
@@ -126,10 +126,12 @@ Phoenix Platform es una plataforma modular de trading algorítmico. Está siendo
 - 3.53 — Composition root del transporte HTTP productivo (`http_transport_factory.py`), 62 tests — `create_http_transport() -> UrllibHttpTransport`; sin parámetros: `UrllibHttpTransport.__init__` no recibe dependencias (usa `urllib.request.urlopen` directamente en `post()`); implementación concreta única que satisface `HttpTransport`; no llama a `urlopen` durante construcción; no abre conexiones ni resuelve DNS; no crea cliente ni sesión; errores de red propagados sin retry; validado compositivamente hasta gateway completo; no existe composition root desde configuración externa; no se validó conexión real con Bybit Demo; cancelación, consultas y posiciones pendientes
 - 3.54 — Composition root del serializer JSON productivo (`json_serializer_factory.py`), 76 tests — `create_json_serializer() -> StandardJsonSerializer`; sin parámetros: `StandardJsonSerializer.__init__` no recibe dependencias; delega `dumps` a `json.dumps` y `loads` a `json.loads` sin opciones especiales; satisface `JsonSerializer` Protocol; cada llamada crea instancia nueva (sin singleton); puede compartirse por identidad entre `create_bybit_request_builder` y `create_bybit_response_parser`; no llama a `dumps` ni `loads` durante construcción; no realiza I/O; no lee variables de entorno; no existe composition root desde configuración externa; no se validó conexión real con Bybit Demo; cancelación, consultas y posiciones pendientes
 - 3.55 — Composition root de `BybitHeaderBuilder` (`bybit_header_builder_factory.py`), 64 tests — `create_bybit_header_builder() -> BybitHeaderBuilder`; sin parámetros: `BybitHeaderBuilder.__init__` no recibe dependencias; `build(*, authentication: BybitAuthentication)` produce 5 headers (`X-BAPI-API-KEY`, `X-BAPI-TIMESTAMP`, `X-BAPI-RECV-WINDOW`, `X-BAPI-SIGN`, `Content-Type: application/json`); validación nominal de `BybitAuthentication`; cada llamada crea instancia nueva; no construye headers durante construcción; no realiza I/O; no lee variables de entorno; validado compositivamente con `create_bybit_request_builder` hasta gateway completo; no existe composition root desde configuración externa; no se validó conexión real con Bybit Demo; cancelación, consultas y posiciones pendientes
+- 3.56 — Composition root de `BybitDemoCredentials` desde secretos explícitos (`bybit_demo_credentials_factory.py`), 107 tests — `create_bybit_demo_credentials(*, api_key: str, api_secret: str) -> BybitDemoCredentials`; delega directamente al constructor del dataclass `frozen=True`; `api_key`: str no vacío ni whitespace-only → `ValueError`; tipo no-str → `TypeError` con mensaje `"api_key must be str, got: ..."`, bool rechazado como no-str; `api_secret`: misma validación con mensaje `"api_secret must not be empty or whitespace-only"`; `repr` actual: oculta secreto (`api_secret = field(repr=False)`) — solo muestra `api_key`; factory no lee variables de entorno; no registra ni imprime secretos; no valida credenciales contra Bybit; no crea authenticator, signer ni clock; no ejecuta red; cada llamada crea instancia nueva (sin singleton ni caché); valores no transformados (no strip, no normalización); integrada con `create_bybit_authenticator` y con stack completo hasta gateway; pendiente: composition root desde configuración externa (Railway vars / `.env`); no se validó conexión real con Bybit Demo; cancelación, consultas y posiciones pendientes
 
-**Tests totales:** 2606 passing
+**Tests totales:** 2713 passing
 
 **Próximo hito:** por definir.
+
 
 ---
 
