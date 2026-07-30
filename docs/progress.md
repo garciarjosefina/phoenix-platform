@@ -3,7 +3,7 @@
 ## Estado actual
 
 **Versión:** `v0.1.0` (tag en `main`)
-**Tests:** 3150 passing
+**Tests:** 3224 passing
 **Rama activa:** `main`
 **Última actualización:** 2026-07-30
 
@@ -111,6 +111,7 @@
 | 3.59 | Composition root del recv window de Bybit desde valor explícito (`create_bybit_recv_window_ms`) — 90 tests | `17fec78` |
 | 3.60 | Composition root del timeout HTTP desde valor explícito (`create_http_timeout_seconds`) — 94 tests | `c593df9` |
 | 3.61 | Composition root de la base URL de Bybit Demo desde valor explícito (`create_bybit_demo_base_url`) — 82 tests | `8c4159d` |
+| 3.62 | Composition root integral del Bybit Demo Execution Gateway (`create_configured_bybit_demo_execution_gateway`) — 74 tests | pendiente |
 
 ### Próximo hito
 
