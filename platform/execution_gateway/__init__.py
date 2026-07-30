@@ -53,6 +53,7 @@ from execution_gateway.message_signer_factory import create_message_signer
 from execution_gateway.millisecond_clock_factory import create_millisecond_clock
 from execution_gateway.bybit_recv_window_factory import create_bybit_recv_window_ms
 from execution_gateway.http_timeout_factory import create_http_timeout_seconds
+from execution_gateway.bybit_demo_base_url_factory import create_bybit_demo_base_url
 
 __all__ = [
     "__version__",
@@ -111,4 +112,5 @@ __all__ = [
     "create_millisecond_clock",
     "create_bybit_recv_window_ms",
     "create_http_timeout_seconds",
+    "create_bybit_demo_base_url",
 ]

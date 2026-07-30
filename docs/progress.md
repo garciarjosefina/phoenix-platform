@@ -3,9 +3,9 @@
 ## Estado actual
 
 **Versión:** `v0.1.0` (tag en `main`)
-**Tests:** 3068 passing
+**Tests:** 3150 passing
 **Rama activa:** `main`
-**Última actualización:** 2026-07-29
+**Última actualización:** 2026-07-30
 
 ---
 
@@ -109,7 +109,8 @@
 | 3.57 | Composition root del `MessageSigner` productivo (`create_message_signer`) — 85 tests | `1051ebe` |
 | 3.58 | Composition root del `MillisecondClock` productivo (`create_millisecond_clock`) — 86 tests | `4cfb461` |
 | 3.59 | Composition root del recv window de Bybit desde valor explícito (`create_bybit_recv_window_ms`) — 90 tests | `17fec78` |
-| 3.60 | Composition root del timeout HTTP desde valor explícito (`create_http_timeout_seconds`) — 94 tests | pendiente |
+| 3.60 | Composition root del timeout HTTP desde valor explícito (`create_http_timeout_seconds`) — 94 tests | `c593df9` |
+| 3.61 | Composition root de la base URL de Bybit Demo desde valor explícito (`create_bybit_demo_base_url`) — 82 tests | pendiente |
 
 ### Próximo hito
 
