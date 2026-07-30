@@ -110,7 +110,7 @@
 | 3.58 | Composition root del `MillisecondClock` productivo (`create_millisecond_clock`) — 86 tests | `4cfb461` |
 | 3.59 | Composition root del recv window de Bybit desde valor explícito (`create_bybit_recv_window_ms`) — 90 tests | `17fec78` |
 | 3.60 | Composition root del timeout HTTP desde valor explícito (`create_http_timeout_seconds`) — 94 tests | `c593df9` |
-| 3.61 | Composition root de la base URL de Bybit Demo desde valor explícito (`create_bybit_demo_base_url`) — 82 tests | pendiente |
+| 3.61 | Composition root de la base URL de Bybit Demo desde valor explícito (`create_bybit_demo_base_url`) — 82 tests | `8c4159d` |
 
 ### Próximo hito
 
