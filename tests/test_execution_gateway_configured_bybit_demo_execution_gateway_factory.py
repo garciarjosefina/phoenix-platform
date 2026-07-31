@@ -6,6 +6,7 @@ import execution_gateway
 import execution_gateway.configured_bybit_demo_execution_gateway_factory as _module
 from execution_gateway.bybit_authenticator_factory import create_bybit_authenticator
 from execution_gateway.bybit_gateway import BybitExecutionGateway
+from execution_gateway.bybit_header_builder import BybitHeaderBuilder
 from execution_gateway.bybit_recv_window_factory import create_bybit_recv_window_ms
 from execution_gateway.configured_bybit_demo_execution_gateway_factory import (
     create_configured_bybit_demo_execution_gateway,
@@ -15,6 +16,7 @@ from execution_gateway.hmac_sha256_signer import HmacSha256Signer
 from execution_gateway.http_request_executor import HttpRequestExecutor
 from execution_gateway.http_timeout_factory import create_http_timeout_seconds
 from execution_gateway.standard_bybit_authenticator import StandardBybitAuthenticator
+from execution_gateway.standard_json_serializer import StandardJsonSerializer
 from execution_gateway.system_millisecond_clock import SystemMillisecondClock
 from execution_gateway.urllib_http_transport import UrllibHttpTransport
 
@@ -23,6 +25,27 @@ _VALID_KEY = "demo-key"
 _VALID_SECRET = "demo-secret"
 _VALID_RECV_WINDOW_MS = 5_000
 _VALID_TIMEOUT_SECONDS = 5.0
+
+# Nombre de cada factory inferior, tal como fue importada dentro del módulo
+# `configured_bybit_demo_execution_gateway_factory`, mapeado a la clave bajo
+# la cual se captura su valor de retorno real en `_build_with_capture`.
+_CAPTURE_MAP = {
+    "create_bybit_demo_credentials": "credentials",
+    "create_message_signer": "signer",
+    "create_millisecond_clock": "clock",
+    "create_bybit_recv_window_ms": "recv_window_ms",
+    "create_bybit_authenticator": "authenticator",
+    "create_json_serializer": "serializer",
+    "create_bybit_header_builder": "header_builder",
+    "create_bybit_request_builder": "request_builder",
+    "create_bybit_response_parser": "response_parser",
+    "create_http_transport": "transport",
+    "create_http_timeout_seconds": "timeout_seconds",
+    "create_http_request_executor": "request_executor",
+    "create_bybit_private_request_sender": "sender",
+    "create_bybit_private_api": "private_api",
+    "create_bybit_demo_execution_gateway": "gateway",
+}
 
 
 def _build(**overrides):
@@ -34,6 +57,26 @@ def _build(**overrides):
     )
     kwargs.update(overrides)
     return create_configured_bybit_demo_execution_gateway(**kwargs)
+
+
+def _build_with_capture(monkeypatch, **overrides):
+    """Ejecuta la factory real, espiando cada factory inferior importada en
+    el módulo para capturar el objeto que ella misma retornó. Cada spy
+    delega en la función original y devuelve exactamente lo que ésta
+    produjo — no sustituye ni fabrica objetos falsos."""
+    captured: dict[str, object] = {}
+    for factory_name, key in _CAPTURE_MAP.items():
+        original = getattr(_module, factory_name)
+
+        def spy(*args, __original=original, __key=key, **kwargs):
+            result = __original(*args, **kwargs)
+            captured[__key] = result
+            return result
+
+        monkeypatch.setattr(_module, factory_name, spy)
+
+    gateway = _build(**overrides)
+    return gateway, captured
 
 
 # ---------------------------------------------------------------------------
@@ -265,62 +308,132 @@ class TestExceptionPropagation:
 
 # ---------------------------------------------------------------------------
 # 5. Identidad de dependencias
+#
+# Cada test espía la factory inferior correspondiente (ver _build_with_capture),
+# captura el objeto real que ésta retornó, y navega el grafo efectivamente
+# construido para comprobar por `is` que ese mismo objeto -y no una copia ni
+# una instancia nueva equivalente- es el que quedó inyectado.
 # ---------------------------------------------------------------------------
 
 class TestIdentity:
-    def test_credentials_identity_preserved_in_authenticator(self):
-        gateway = _build()
+    def test_credentials_identity(self, monkeypatch):
+        gateway, captured = _build_with_capture(monkeypatch)
+        graph_credentials = gateway._client._create_order_operation._endpoint_executor._private_api._sender._request_builder._authenticator._credentials
+        assert graph_credentials is captured["credentials"]
+
+    def test_signer_identity(self, monkeypatch):
+        gateway, captured = _build_with_capture(monkeypatch)
+        graph_signer = gateway._client._create_order_operation._endpoint_executor._private_api._sender._request_builder._authenticator._signer
+        assert graph_signer is captured["signer"]
+
+    def test_clock_identity(self, monkeypatch):
+        gateway, captured = _build_with_capture(monkeypatch)
+        graph_clock = gateway._client._create_order_operation._endpoint_executor._private_api._sender._request_builder._authenticator._clock
+        assert graph_clock is captured["clock"]
+
+    def test_recv_window_ms_value_and_type(self, monkeypatch):
+        gateway, captured = _build_with_capture(monkeypatch)
         authenticator = gateway._client._create_order_operation._endpoint_executor._private_api._sender._request_builder._authenticator
-        credentials = authenticator._credentials
-        assert isinstance(credentials, BybitDemoCredentials)
+        assert authenticator._recv_window_ms == captured["recv_window_ms"]
+        assert type(authenticator._recv_window_ms) is type(captured["recv_window_ms"])
 
-    def test_signer_identity_preserved_in_authenticator(self):
-        gateway = _build()
-        authenticator = gateway._client._create_order_operation._endpoint_executor._private_api._sender._request_builder._authenticator
-        assert authenticator._signer is not None
+    def test_authenticator_identity(self, monkeypatch):
+        gateway, captured = _build_with_capture(monkeypatch)
+        graph_authenticator = gateway._client._create_order_operation._endpoint_executor._private_api._sender._request_builder._authenticator
+        assert graph_authenticator is captured["authenticator"]
 
-    def test_authenticator_identity_shared_in_request_builder(self):
-        gateway = _build()
-        request_builder = gateway._client._create_order_operation._endpoint_executor._private_api._sender._request_builder
-        assert request_builder._authenticator is not None
-
-    def test_serializer_identity_shared_between_builder_and_parser(self):
-        gateway = _build()
+    def test_serializer_identity_shared_between_builder_and_parser(self, monkeypatch):
+        gateway, captured = _build_with_capture(monkeypatch)
         chain = gateway._client._create_order_operation._endpoint_executor._private_api
-        serializer_in_builder = chain._sender._request_builder._serializer
-        serializer_in_parser = chain._response_parser._serializer
-        assert serializer_in_builder is serializer_in_parser
+        request_builder_serializer = chain._sender._request_builder._serializer
+        response_parser_serializer = chain._response_parser._serializer
+        assert request_builder_serializer is captured["serializer"]
+        assert response_parser_serializer is captured["serializer"]
+        assert request_builder_serializer is response_parser_serializer
 
-    def test_transport_identity_shared_in_executor(self):
-        gateway = _build()
-        executor = gateway._client._create_order_operation._endpoint_executor._private_api._sender._request_executor
-        assert executor._transport is not None
-
-    def test_header_builder_identity_in_request_builder(self):
-        gateway = _build()
+    def test_header_builder_identity(self, monkeypatch):
+        gateway, captured = _build_with_capture(monkeypatch)
         request_builder = gateway._client._create_order_operation._endpoint_executor._private_api._sender._request_builder
-        assert request_builder._header_builder is not None
+        assert request_builder._header_builder is captured["header_builder"]
 
-    def test_request_executor_identity_in_sender(self):
-        gateway = _build()
+    def test_request_builder_identity(self, monkeypatch):
+        gateway, captured = _build_with_capture(monkeypatch)
         sender = gateway._client._create_order_operation._endpoint_executor._private_api._sender
-        assert sender._request_executor is not None
+        assert sender._request_builder is captured["request_builder"]
 
-    def test_request_builder_identity_in_sender(self):
-        gateway = _build()
-        sender = gateway._client._create_order_operation._endpoint_executor._private_api._sender
-        assert sender._request_builder is not None
-
-    def test_private_api_identity_in_endpoint_executor(self):
-        gateway = _build()
-        endpoint_executor = gateway._client._create_order_operation._endpoint_executor
-        assert endpoint_executor._private_api is not None
-
-    def test_sender_and_parser_share_underlying_private_api(self):
-        gateway = _build()
+    def test_response_parser_identity(self, monkeypatch):
+        gateway, captured = _build_with_capture(monkeypatch)
         private_api = gateway._client._create_order_operation._endpoint_executor._private_api
-        assert private_api._sender is not None
-        assert private_api._response_parser is not None
+        assert private_api._response_parser is captured["response_parser"]
+
+    def test_transport_identity(self, monkeypatch):
+        gateway, captured = _build_with_capture(monkeypatch)
+        request_executor = gateway._client._create_order_operation._endpoint_executor._private_api._sender._request_executor
+        assert request_executor._transport is captured["transport"]
+
+    def test_timeout_seconds_value_and_type(self, monkeypatch):
+        gateway, captured = _build_with_capture(monkeypatch)
+        request_executor = gateway._client._create_order_operation._endpoint_executor._private_api._sender._request_executor
+        assert request_executor._timeout_seconds == captured["timeout_seconds"]
+        assert type(request_executor._timeout_seconds) is type(captured["timeout_seconds"])
+
+    def test_request_executor_identity(self, monkeypatch):
+        gateway, captured = _build_with_capture(monkeypatch)
+        sender = gateway._client._create_order_operation._endpoint_executor._private_api._sender
+        assert sender._request_executor is captured["request_executor"]
+
+    def test_sender_identity(self, monkeypatch):
+        gateway, captured = _build_with_capture(monkeypatch)
+        private_api = gateway._client._create_order_operation._endpoint_executor._private_api
+        assert private_api._sender is captured["sender"]
+
+    def test_private_api_identity(self, monkeypatch):
+        gateway, captured = _build_with_capture(monkeypatch)
+        endpoint_executor = gateway._client._create_order_operation._endpoint_executor
+        assert endpoint_executor._private_api is captured["private_api"]
+
+    def test_gateway_identity(self, monkeypatch):
+        gateway, captured = _build_with_capture(monkeypatch)
+        assert gateway is captured["gateway"]
+
+
+# ---------------------------------------------------------------------------
+# 5b. Sensibilidad a composición rota (mutación)
+#
+# Estos tests no rompen producción: sustituyen temporalmente, sólo dentro del
+# test, el valor que retorna una factory inferior, y comprueban que ese
+# cambio se refleja en el grafo real. Si la factory integral construyera sus
+# propias instancias en lugar de reutilizar las inyectadas, o si dejara de
+# compartir el serializer, estos tests dejarían de pasar.
+# ---------------------------------------------------------------------------
+
+class TestIdentityMutationSensitivity:
+    def test_composition_reflects_substituted_signer(self, monkeypatch):
+        substituted_signer = HmacSha256Signer()
+        monkeypatch.setattr(_module, "create_message_signer", lambda: substituted_signer)
+        gateway = _build()
+        graph_signer = gateway._client._create_order_operation._endpoint_executor._private_api._sender._request_builder._authenticator._signer
+        assert graph_signer is substituted_signer
+
+    def test_composition_reflects_substituted_transport(self, monkeypatch):
+        substituted_transport = UrllibHttpTransport()
+        monkeypatch.setattr(_module, "create_http_transport", lambda: substituted_transport)
+        gateway = _build()
+        graph_transport = gateway._client._create_order_operation._endpoint_executor._private_api._sender._request_executor._transport
+        assert graph_transport is substituted_transport
+
+    def test_serializer_factory_invoked_exactly_once(self, monkeypatch):
+        call_count = 0
+        original = _module.create_json_serializer
+
+        def counting_spy():
+            nonlocal call_count
+            call_count += 1
+            return original()
+
+        monkeypatch.setattr(_module, "create_json_serializer", counting_spy)
+        _build()
+        assert call_count == 1
 
 
 # ---------------------------------------------------------------------------
@@ -448,6 +561,27 @@ class TestNoExecutionDuringComposition:
         _build()
         assert calls == []
 
+    def test_no_serialization_during_construction(self, monkeypatch):
+        def explode(self, value):
+            raise AssertionError("dumps must not be called during composition")
+
+        monkeypatch.setattr(StandardJsonSerializer, "dumps", explode)
+        _build()
+
+    def test_no_deserialization_during_construction(self, monkeypatch):
+        def explode(self, value):
+            raise AssertionError("loads must not be called during composition")
+
+        monkeypatch.setattr(StandardJsonSerializer, "loads", explode)
+        _build()
+
+    def test_no_header_building_during_construction(self, monkeypatch):
+        def explode(self, *, authentication):
+            raise AssertionError("header builder must not be called during composition")
+
+        monkeypatch.setattr(BybitHeaderBuilder, "build", explode)
+        _build()
+
     def test_no_env_vars_read(self, monkeypatch):
         monkeypatch.setenv("BYBIT_API_KEY", "env-key")
         monkeypatch.setenv("BYBIT_API_SECRET", "env-secret")
@@ -553,10 +687,6 @@ class TestStaticSecurity:
 # ---------------------------------------------------------------------------
 
 class TestNoExtraResponsibilities:
-    def test_does_not_expose_send_order(self):
-        gateway = _build()
-        assert not hasattr(create_configured_bybit_demo_execution_gateway, "send_order")
-
     def test_full_suite_unaffected(self):
         from execution_gateway.config import GatewayConfig
         assert GatewayConfig().environment == "demo"
