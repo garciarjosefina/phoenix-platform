@@ -1,3 +1,4 @@
+import dataclasses
 import inspect
 
 import pytest
@@ -5,6 +6,7 @@ import pytest
 import execution_gateway
 import execution_gateway.configured_bybit_demo_execution_gateway_factory as _module
 from execution_gateway.bybit_authenticator_factory import create_bybit_authenticator
+from execution_gateway.bybit_demo_execution_config import BybitDemoExecutionConfig
 from execution_gateway.bybit_gateway import BybitExecutionGateway
 from execution_gateway.bybit_header_builder import BybitHeaderBuilder
 from execution_gateway.bybit_recv_window_factory import create_bybit_recv_window_ms
@@ -48,7 +50,7 @@ _CAPTURE_MAP = {
 }
 
 
-def _build(**overrides):
+def _build_config(**overrides):
     kwargs = dict(
         api_key=_VALID_KEY,
         api_secret=_VALID_SECRET,
@@ -56,7 +58,12 @@ def _build(**overrides):
         timeout_seconds=_VALID_TIMEOUT_SECONDS,
     )
     kwargs.update(overrides)
-    return create_configured_bybit_demo_execution_gateway(**kwargs)
+    return BybitDemoExecutionConfig(**kwargs)
+
+
+def _build(**overrides):
+    config = _build_config(**overrides)
+    return create_configured_bybit_demo_execution_gateway(config=config)
 
 
 def _build_with_capture(monkeypatch, **overrides):
@@ -77,6 +84,23 @@ def _build_with_capture(monkeypatch, **overrides):
 
     gateway = _build(**overrides)
     return gateway, captured
+
+
+def _raising(exc):
+    def _fn(*args, **kwargs):
+        raise exc
+    return _fn
+
+
+class _StructuralFakeConfig:
+    """Objeto con los mismos cuatro atributos que BybitDemoExecutionConfig,
+    pero que no es una instancia real. Usado para probar que la validación
+    de la factory integral es nominal (isinstance), no estructural."""
+    def __init__(self):
+        self.api_key = _VALID_KEY
+        self.api_secret = _VALID_SECRET
+        self.recv_window_ms = _VALID_RECV_WINDOW_MS
+        self.timeout_seconds = _VALID_TIMEOUT_SECONDS
 
 
 # ---------------------------------------------------------------------------
@@ -117,19 +141,28 @@ class TestImport:
 # ---------------------------------------------------------------------------
 
 class TestSignature:
-    def test_all_parameters_keyword_only(self):
+    def test_single_parameter_named_config(self):
         sig = inspect.signature(create_configured_bybit_demo_execution_gateway)
-        for param in sig.parameters.values():
-            assert param.kind == inspect.Parameter.KEYWORD_ONLY
+        assert set(sig.parameters) == {"config"}
 
-    def test_parameter_names(self):
+    def test_config_parameter_is_keyword_only(self):
         sig = inspect.signature(create_configured_bybit_demo_execution_gateway)
-        assert set(sig.parameters) == {
-            "api_key",
-            "api_secret",
-            "recv_window_ms",
-            "timeout_seconds",
-        }
+        assert sig.parameters["config"].kind == inspect.Parameter.KEYWORD_ONLY
+
+    def test_config_parameter_annotated_correctly(self):
+        hints = inspect.get_annotations(
+            create_configured_bybit_demo_execution_gateway, eval_str=True
+        )
+        assert hints.get("config") is BybitDemoExecutionConfig
+
+    def test_no_default_value(self):
+        sig = inspect.signature(create_configured_bybit_demo_execution_gateway)
+        assert sig.parameters["config"].default is inspect.Parameter.empty
+
+    def test_no_legacy_parameter_names(self):
+        sig = inspect.signature(create_configured_bybit_demo_execution_gateway)
+        for legacy in ("api_key", "api_secret", "recv_window_ms", "timeout_seconds"):
+            assert legacy not in sig.parameters
 
     def test_no_base_url_parameter(self):
         sig = inspect.signature(create_configured_bybit_demo_execution_gateway)
@@ -139,20 +172,10 @@ class TestSignature:
         sig = inspect.signature(create_configured_bybit_demo_execution_gateway)
         assert "environment" not in sig.parameters
 
-    def test_no_credentials_object_parameter(self):
-        sig = inspect.signature(create_configured_bybit_demo_execution_gateway)
-        assert "credentials" not in sig.parameters
-
-    def test_no_default_values(self):
-        sig = inspect.signature(create_configured_bybit_demo_execution_gateway)
-        for param in sig.parameters.values():
-            assert param.default is inspect.Parameter.empty
-
     def test_no_positional_args_accepted(self):
+        config = _build_config()
         with pytest.raises(TypeError):
-            create_configured_bybit_demo_execution_gateway(
-                _VALID_KEY, _VALID_SECRET, _VALID_RECV_WINDOW_MS, _VALID_TIMEOUT_SECONDS
-            )
+            create_configured_bybit_demo_execution_gateway(config)
 
     def test_return_annotation_is_bybit_execution_gateway(self):
         hints = inspect.get_annotations(
@@ -162,7 +185,173 @@ class TestSignature:
 
 
 # ---------------------------------------------------------------------------
-# 3. Composición completa
+# 3. Validación nominal del config
+# ---------------------------------------------------------------------------
+
+class TestNominalConfigValidation:
+    def test_accepts_real_config(self):
+        config = _build_config()
+        gateway = create_configured_bybit_demo_execution_gateway(config=config)
+        assert isinstance(gateway, BybitExecutionGateway)
+
+    def test_rejects_none(self):
+        with pytest.raises(TypeError, match="config must be BybitDemoExecutionConfig, got: NoneType"):
+            create_configured_bybit_demo_execution_gateway(config=None)
+
+    def test_rejects_dict(self):
+        fake = dict(
+            api_key=_VALID_KEY, api_secret=_VALID_SECRET,
+            recv_window_ms=_VALID_RECV_WINDOW_MS, timeout_seconds=_VALID_TIMEOUT_SECONDS,
+        )
+        with pytest.raises(TypeError, match="config must be BybitDemoExecutionConfig, got: dict"):
+            create_configured_bybit_demo_execution_gateway(config=fake)
+
+    def test_rejects_tuple(self):
+        fake = (_VALID_KEY, _VALID_SECRET, _VALID_RECV_WINDOW_MS, _VALID_TIMEOUT_SECONDS)
+        with pytest.raises(TypeError, match="config must be BybitDemoExecutionConfig, got: tuple"):
+            create_configured_bybit_demo_execution_gateway(config=fake)
+
+    def test_rejects_arbitrary_object(self):
+        with pytest.raises(TypeError, match="config must be BybitDemoExecutionConfig, got: object"):
+            create_configured_bybit_demo_execution_gateway(config=object())
+
+    def test_rejects_structural_duck_type(self):
+        fake = _StructuralFakeConfig()
+        with pytest.raises(
+            TypeError,
+            match="config must be BybitDemoExecutionConfig, got: _StructuralFakeConfig",
+        ):
+            create_configured_bybit_demo_execution_gateway(config=fake)
+
+    def test_rejects_legacy_call_with_four_loose_values(self):
+        with pytest.raises(TypeError, match="unexpected keyword argument"):
+            create_configured_bybit_demo_execution_gateway(
+                api_key=_VALID_KEY,
+                api_secret=_VALID_SECRET,
+                recv_window_ms=_VALID_RECV_WINDOW_MS,
+                timeout_seconds=_VALID_TIMEOUT_SECONDS,
+            )
+
+    def test_rejects_partial_legacy_call(self):
+        with pytest.raises(TypeError):
+            create_configured_bybit_demo_execution_gateway(api_key=_VALID_KEY)
+
+    def test_does_not_construct_a_new_config(self, monkeypatch):
+        config = _build_config()
+        original_init = BybitDemoExecutionConfig.__init__
+        calls = []
+
+        def spy_init(self, *args, **kwargs):
+            calls.append(True)
+            return original_init(self, *args, **kwargs)
+
+        monkeypatch.setattr(BybitDemoExecutionConfig, "__init__", spy_init)
+        create_configured_bybit_demo_execution_gateway(config=config)
+        assert calls == []
+
+
+# ---------------------------------------------------------------------------
+# 4. Config no mutado
+# ---------------------------------------------------------------------------
+
+class TestConfigNotMutated:
+    def test_values_unchanged_after_build(self):
+        config = _build_config(api_key="k", api_secret="s", recv_window_ms=1234, timeout_seconds=6.5)
+        create_configured_bybit_demo_execution_gateway(config=config)
+        assert config.api_key == "k"
+        assert config.api_secret == "s"
+        assert config.recv_window_ms == 1234
+        assert config.timeout_seconds == 6.5
+
+    def test_repr_unchanged_after_build(self):
+        config = _build_config()
+        before = repr(config)
+        create_configured_bybit_demo_execution_gateway(config=config)
+        assert repr(config) == before
+
+    def test_hash_unchanged_after_build(self):
+        config = _build_config()
+        before = hash(config)
+        create_configured_bybit_demo_execution_gateway(config=config)
+        assert hash(config) == before
+
+    def test_config_not_serialized(self, monkeypatch):
+        original_asdict = dataclasses.asdict
+
+        def exploding_asdict(*args, **kwargs):
+            raise AssertionError("config must not be serialized during composition")
+
+        monkeypatch.setattr(dataclasses, "asdict", exploding_asdict)
+        try:
+            _build()
+        finally:
+            monkeypatch.setattr(dataclasses, "asdict", original_asdict)
+
+
+# ---------------------------------------------------------------------------
+# 5. Valores del config leídos exactamente
+# ---------------------------------------------------------------------------
+
+class TestConfigValuesPassedExactly:
+    def test_credentials_receive_exact_config_values(self, monkeypatch):
+        config = _build_config(api_key="specific-key", api_secret="specific-secret")
+        captured = {}
+        original = _module.create_bybit_demo_credentials
+
+        def spy(*, api_key, api_secret):
+            captured["api_key"] = api_key
+            captured["api_secret"] = api_secret
+            return original(api_key=api_key, api_secret=api_secret)
+
+        monkeypatch.setattr(_module, "create_bybit_demo_credentials", spy)
+        create_configured_bybit_demo_execution_gateway(config=config)
+        assert captured["api_key"] is config.api_key
+        assert captured["api_secret"] is config.api_secret
+
+    def test_recv_window_receives_exact_config_value(self, monkeypatch):
+        config = _build_config(recv_window_ms=8_765)
+        captured = {}
+        original = _module.create_bybit_recv_window_ms
+
+        def spy(*, recv_window_ms):
+            captured["recv_window_ms"] = recv_window_ms
+            return original(recv_window_ms=recv_window_ms)
+
+        monkeypatch.setattr(_module, "create_bybit_recv_window_ms", spy)
+        create_configured_bybit_demo_execution_gateway(config=config)
+        assert captured["recv_window_ms"] == config.recv_window_ms
+        assert type(captured["recv_window_ms"]) is type(config.recv_window_ms)
+
+    def test_timeout_receives_exact_config_value(self, monkeypatch):
+        config = _build_config(timeout_seconds=17.25)
+        captured = {}
+        original = _module.create_http_timeout_seconds
+
+        def spy(*, timeout_seconds):
+            captured["timeout_seconds"] = timeout_seconds
+            return original(timeout_seconds=timeout_seconds)
+
+        monkeypatch.setattr(_module, "create_http_timeout_seconds", spy)
+        create_configured_bybit_demo_execution_gateway(config=config)
+        assert captured["timeout_seconds"] == config.timeout_seconds
+        assert type(captured["timeout_seconds"]) is type(config.timeout_seconds)
+
+    def test_timeout_int_type_preserved_through_composition(self, monkeypatch):
+        config = _build_config(timeout_seconds=5)
+        captured = {}
+        original = _module.create_http_timeout_seconds
+
+        def spy(*, timeout_seconds):
+            captured["timeout_seconds"] = timeout_seconds
+            return original(timeout_seconds=timeout_seconds)
+
+        monkeypatch.setattr(_module, "create_http_timeout_seconds", spy)
+        create_configured_bybit_demo_execution_gateway(config=config)
+        assert type(captured["timeout_seconds"]) is int
+
+
+# ---------------------------------------------------------------------------
+# 6. Composición completa
 # ---------------------------------------------------------------------------
 
 class TestFullComposition:
@@ -233,10 +422,10 @@ class TestFullComposition:
 
 
 # ---------------------------------------------------------------------------
-# 4. Propagación exacta de excepciones
+# 7. Propagación de excepciones desde valores inválidos en el config
 # ---------------------------------------------------------------------------
 
-class TestExceptionPropagation:
+class TestInvalidConfigValuePropagation:
     def test_invalid_api_key_type_raises_type_error(self):
         with pytest.raises(TypeError, match="api_key must be str"):
             _build(api_key=123)
@@ -307,7 +496,50 @@ class TestExceptionPropagation:
 
 
 # ---------------------------------------------------------------------------
-# 5. Identidad de dependencias
+# 7b. Propagación por identidad de excepciones de factories inferiores
+#
+# Estos tests sustituyen temporalmente una factory inferior por un spy que
+# lanza una excepción marcador, y comprueban que ese mismo objeto de
+# excepción -por identidad- atraviesa la factory integral sin ser envuelto,
+# capturado ni transformado.
+# ---------------------------------------------------------------------------
+
+class TestLowerFactoryExceptionPropagation:
+    def test_credentials_factory_exception_propagates_by_identity(self, monkeypatch):
+        marker = RuntimeError("boom-credentials")
+        monkeypatch.setattr(_module, "create_bybit_demo_credentials", _raising(marker))
+        config = _build_config()
+        with pytest.raises(RuntimeError) as exc_info:
+            create_configured_bybit_demo_execution_gateway(config=config)
+        assert exc_info.value is marker
+
+    def test_authenticator_factory_exception_propagates_by_identity(self, monkeypatch):
+        marker = RuntimeError("boom-authenticator")
+        monkeypatch.setattr(_module, "create_bybit_authenticator", _raising(marker))
+        config = _build_config()
+        with pytest.raises(RuntimeError) as exc_info:
+            create_configured_bybit_demo_execution_gateway(config=config)
+        assert exc_info.value is marker
+
+    def test_request_executor_factory_exception_propagates_by_identity(self, monkeypatch):
+        marker = RuntimeError("boom-executor")
+        monkeypatch.setattr(_module, "create_http_request_executor", _raising(marker))
+        config = _build_config()
+        with pytest.raises(RuntimeError) as exc_info:
+            create_configured_bybit_demo_execution_gateway(config=config)
+        assert exc_info.value is marker
+
+    def test_final_gateway_factory_exception_propagates_by_identity(self, monkeypatch):
+        marker = RuntimeError("boom-gateway")
+        monkeypatch.setattr(_module, "create_bybit_demo_execution_gateway", _raising(marker))
+        config = _build_config()
+        with pytest.raises(RuntimeError) as exc_info:
+            create_configured_bybit_demo_execution_gateway(config=config)
+        assert exc_info.value is marker
+
+
+# ---------------------------------------------------------------------------
+# 8. Identidad de dependencias
 #
 # Cada test espía la factory inferior correspondiente (ver _build_with_capture),
 # captura el objeto real que ésta retornó, y navega el grafo efectivamente
@@ -398,7 +630,7 @@ class TestIdentity:
 
 
 # ---------------------------------------------------------------------------
-# 5b. Sensibilidad a composición rota (mutación)
+# 8b. Sensibilidad a composición rota (mutación)
 #
 # Estos tests no rompen producción: sustituyen temporalmente, sólo dentro del
 # test, el valor que retorna una factory inferior, y comprueban que ese
@@ -437,7 +669,7 @@ class TestIdentityMutationSensitivity:
 
 
 # ---------------------------------------------------------------------------
-# 6. Múltiples llamadas — sin estado compartido
+# 9. Múltiples llamadas — sin estado compartido
 # ---------------------------------------------------------------------------
 
 class TestMultipleCalls:
@@ -477,9 +709,19 @@ class TestMultipleCalls:
         clients = {id(g._client) for g in gateways}
         assert len(clients) == 5
 
+    def test_same_config_reused_produces_independent_graphs(self):
+        config = _build_config()
+        g1 = create_configured_bybit_demo_execution_gateway(config=config)
+        g2 = create_configured_bybit_demo_execution_gateway(config=config)
+        assert g1 is not g2
+        assert g1._client is not g2._client
+        c1 = g1._client._create_order_operation._endpoint_executor._private_api._sender._request_builder._authenticator._credentials
+        c2 = g2._client._create_order_operation._endpoint_executor._private_api._sender._request_builder._authenticator._credentials
+        assert c1 is not c2
+
 
 # ---------------------------------------------------------------------------
-# 7. Ausencia de ejecución durante la composición
+# 10. Ausencia de ejecución durante la composición
 # ---------------------------------------------------------------------------
 
 class TestNoExecutionDuringComposition:
@@ -606,7 +848,7 @@ class TestNoExecutionDuringComposition:
 
 
 # ---------------------------------------------------------------------------
-# 8. Seguridad estática
+# 11. Seguridad estática
 # ---------------------------------------------------------------------------
 
 class TestStaticSecurity:
@@ -641,6 +883,7 @@ class TestStaticSecurity:
         src = inspect.getsource(create_configured_bybit_demo_execution_gateway)
         forbidden = [
             "BybitDemoCredentials(",
+            "BybitDemoExecutionConfig(",
             "StandardBybitAuthenticator(",
             "HttpRequestExecutor(",
             "BybitPrivateApi(",
@@ -683,7 +926,7 @@ class TestStaticSecurity:
 
 
 # ---------------------------------------------------------------------------
-# 9. Ausencia de responsabilidades adicionales
+# 12. Ausencia de responsabilidades adicionales
 # ---------------------------------------------------------------------------
 
 class TestNoExtraResponsibilities:

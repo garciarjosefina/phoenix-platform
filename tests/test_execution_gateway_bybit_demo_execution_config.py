@@ -324,6 +324,33 @@ class TestTimeoutValidation:
 
 
 # ---------------------------------------------------------------------------
+# 5b. Orden de validación
+#
+# __post_init__ valida en el orden: api_key/api_secret (create_bybit_demo_credentials)
+# -> recv_window_ms (create_bybit_recv_window_ms) -> timeout_seconds
+# (create_http_timeout_seconds), y se detiene en el primer campo inválido sin
+# evaluar los siguientes.
+# ---------------------------------------------------------------------------
+
+class TestValidationOrder:
+    def test_all_four_fields_invalid_raises_api_key_error_first(self):
+        with pytest.raises(ValueError, match="api_key must not be empty or whitespace-only"):
+            _build(api_key="", api_secret="", recv_window_ms=0, timeout_seconds=0)
+
+    def test_valid_credentials_invalid_recv_and_timeout_raises_recv_error_first(self):
+        with pytest.raises(ValueError, match="recv_window_ms must be > 0, got: 0"):
+            _build(api_key="k", api_secret="s", recv_window_ms=0, timeout_seconds=0)
+
+    def test_valid_credentials_and_recv_invalid_timeout_raises_timeout_error(self):
+        with pytest.raises(ValueError, match="timeout_seconds must be > 0, got: 0"):
+            _build(api_key="k", api_secret="s", recv_window_ms=5_000, timeout_seconds=0)
+
+    def test_invalid_api_secret_takes_precedence_over_invalid_recv_and_timeout(self):
+        with pytest.raises(ValueError, match="api_secret must not be empty or whitespace-only"):
+            _build(api_key="k", api_secret="", recv_window_ms=0, timeout_seconds=0)
+
+
+# ---------------------------------------------------------------------------
 # 6. Inmutabilidad
 # ---------------------------------------------------------------------------
 
@@ -375,11 +402,12 @@ class TestSecurity:
         assert "visible-key" in repr(config)
 
     def test_exception_messages_do_not_leak_secret(self):
+        marker = "ZZTOPSECRETMARKER9999"
         try:
-            _build(api_secret=123)
-            assert False, "expected TypeError"
-        except TypeError as e:
-            assert "123" not in str(e) or "api_secret must be str" in str(e)
+            _build(api_secret=marker, recv_window_ms=0)
+            assert False, "expected ValueError"
+        except ValueError as e:
+            assert marker not in str(e)
 
     def test_does_not_import_os(self):
         assert "os" not in vars(_module)
