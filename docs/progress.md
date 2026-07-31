@@ -114,7 +114,7 @@
 | 3.62 | Composition root integral del Bybit Demo Execution Gateway (`create_configured_bybit_demo_execution_gateway`) — 74 tests | `823e6b8` |
 | 3.62-fix | Corrección post-auditoría (Opus): pruebas de identidad reales por `is`, sensibilidad a mutación, ausencia conductual de serialización/headers — 84 tests (solo tests, sin cambios en `platform/`) | `1844512` |
 | 3.63 | Configuración tipada e inmutable de Bybit Demo (`BybitDemoExecutionConfig`) — 111 tests | `3a5e59f` |
-| 3.64 | Composition root integral adaptado para recibir `BybitDemoExecutionConfig` (firma anterior eliminada) — 107 tests de la factory + 4 tests de orden de validación en el config | pendiente |
+| 3.64 | Composition root integral adaptado para recibir `BybitDemoExecutionConfig` (firma anterior eliminada) — 107 tests de la factory + 4 tests de orden de validación en el config | `857ebe4` |
 
 ### Próximo hito
 
