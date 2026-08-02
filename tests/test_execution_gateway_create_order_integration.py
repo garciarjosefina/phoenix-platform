@@ -11,7 +11,8 @@ Sección A — desde BybitDemoClient.create_order() con SpyExecutor:
   → BybitCreateOrderResult
 
 Sección B — desde BybitExecutionGateway.execute() con SpyPrivateApi:
-  BybitExecutionGateway.execute()
+  BybitExecutionGateway.execute(ExecutionRequest)     ← Port del dominio
+  → traducción interna a BybitCreateOrderRequest       (adaptador)
   → BybitDemoClient.place_order()
   → BybitDemoClient.create_order()
   → BybitCreateOrderOperation
@@ -22,6 +23,7 @@ Sección B — desde BybitExecutionGateway.execute() con SpyPrivateApi:
   → BybitResponse
   → BybitCreateOrderResponseInterpreter
   → BybitCreateOrderResult
+  → traducción interna a ExecutionResult               (adaptador)
 """
 from decimal import Decimal
 
@@ -39,6 +41,7 @@ from execution_gateway.bybit_gateway import BybitExecutionGateway
 from execution_gateway.bybit_private_api import BybitPrivateApi
 from execution_gateway.bybit_response import BybitResponse
 from execution_gateway.bybit_url_builder import BybitUrlBuilder
+from execution_gateway.contracts import ExecutionRequest, ExecutionResult
 
 
 # ---------------------------------------------------------------------------
@@ -584,21 +587,38 @@ class TestNoExternalEffects:
 # ===========================================================================
 #
 # Clase concreta del gateway: BybitExecutionGateway
-# Método público probado:     execute(request: BybitCreateOrderRequest)
+# Método público probado:     execute(request: ExecutionRequest) -> ExecutionResult
+#                              (contrato del dominio — Port ExecutionGateway;
+#                              ningún tipo Bybit cruza esta frontera pública)
 # Frontera simulada:          SpyPrivateApi (reemplaza BybitPrivateApi)
 # Componentes reales:         BybitUrlBuilder, BybitEndpointExecutor,
 #                             BybitDemoClient, BybitCreateOrderOperation,
 #                             BybitCreateOrderPayloadBuilder,
 #                             BybitCreateOrderResponseInterpreter
 #
-# BybitExecutionGateway.execute() → BybitDemoClient.place_order()
-# → BybitDemoClient.create_order() → BybitCreateOrderOperation
-# → BybitCreateOrderPayloadBuilder → BybitEndpointExecutor (real)
-# → BybitUrlBuilder (real) → SpyPrivateApi (frontera)
+# BybitExecutionGateway.execute(ExecutionRequest)
+# → traduce a BybitCreateOrderRequest (dentro del adaptador)
+# → BybitDemoClient.place_order() → BybitDemoClient.create_order()
+# → BybitCreateOrderOperation → BybitCreateOrderPayloadBuilder
+# → BybitEndpointExecutor (real) → BybitUrlBuilder (real) → SpyPrivateApi (frontera)
 # → BybitResponse → BybitCreateOrderResponseInterpreter → BybitCreateOrderResult
+# → traduce a ExecutionResult (dentro del adaptador)
 # ===========================================================================
 
 _GATEWAY_BASE_URL = "https://api-demo.bybit.com"
+
+
+def _make_execution_request(order_id: str = "phoenix-test-order-001", **overrides) -> ExecutionRequest:
+    kwargs = dict(
+        order_id=order_id,
+        symbol="BTCUSDT",
+        side="buy",
+        order_type="limit",
+        quantity=0.001,
+        price=50_000,
+    )
+    kwargs.update(overrides)
+    return ExecutionRequest(**kwargs)
 
 
 class SpyPrivateApi(BybitPrivateApi):
@@ -688,97 +708,109 @@ class TestGatewayDiagnosis:
 # ---------------------------------------------------------------------------
 
 class TestGatewaySuccessFlow:
-    def test_gateway_accepts_bybit_create_order_request(self):
+    def test_gateway_accepts_execution_request(self):
         spy = SpyPrivateApi()
         gw = _build_gateway(spy)
-        result = gw.execute(_make_request())
+        result = gw.execute(_make_execution_request())
         assert result is not None
 
-    def test_returns_bybit_create_order_result(self):
+    def test_returns_execution_result(self):
         spy = SpyPrivateApi()
         gw = _build_gateway(spy)
-        result = gw.execute(_make_request())
-        assert isinstance(result, BybitCreateOrderResult)
+        result = gw.execute(_make_execution_request())
+        assert isinstance(result, ExecutionResult)
 
-    def test_order_id_conserved(self):
+    def test_does_not_return_bybit_create_order_result(self):
+        spy = SpyPrivateApi()
+        gw = _build_gateway(spy)
+        result = gw.execute(_make_execution_request())
+        assert not isinstance(result, BybitCreateOrderResult)
+
+    def test_order_id_preserves_domain_identity(self):
         spy = SpyPrivateApi()
         spy._return_response = _make_success_response(order_id="gw-order-456")
         gw = _build_gateway(spy)
-        result = gw.execute(_make_request())
-        assert result.order_id == "gw-order-456"
+        result = gw.execute(_make_execution_request(order_id="domain-order-1"))
+        assert result.order_id == "domain-order-1"
 
-    def test_order_link_id_conserved(self):
+    def test_exchange_order_id_carries_bybit_order_id(self):
         spy = SpyPrivateApi()
-        spy._return_response = _make_success_response(order_link_id="gw-link-xyz")
+        spy._return_response = _make_success_response(order_id="gw-order-456")
         gw = _build_gateway(spy)
-        result = gw.execute(_make_request())
-        assert result.order_link_id == "gw-link-xyz"
+        result = gw.execute(_make_execution_request(order_id="domain-order-1"))
+        assert result.exchange_order_id == "gw-order-456"
+
+    def test_payload_order_link_id_uses_domain_order_id(self):
+        spy = SpyPrivateApi()
+        gw = _build_gateway(spy)
+        gw.execute(_make_execution_request(order_id="domain-order-9"))
+        assert spy.calls[0]["payload"]["orderLinkId"] == "domain-order-9"
 
     def test_private_api_called_exactly_once(self):
         spy = SpyPrivateApi()
         gw = _build_gateway(spy)
-        gw.execute(_make_request())
+        gw.execute(_make_execution_request())
         assert len(spy.calls) == 1
 
     def test_correct_url_sent_to_boundary(self):
         spy = SpyPrivateApi()
         gw = _build_gateway(spy)
-        gw.execute(_make_request())
+        gw.execute(_make_execution_request())
         expected_url = _GATEWAY_BASE_URL + BYBIT_CREATE_ORDER_ENDPOINT.path
         assert spy.calls[0]["url"] == expected_url
 
     def test_endpoint_path_in_url(self):
         spy = SpyPrivateApi()
         gw = _build_gateway(spy)
-        gw.execute(_make_request())
+        gw.execute(_make_execution_request())
         assert "/v5/order/create" in spy.calls[0]["url"]
 
     def test_payload_category_at_gateway(self):
         spy = SpyPrivateApi()
         gw = _build_gateway(spy)
-        gw.execute(_make_request())
+        gw.execute(_make_execution_request())
         assert spy.calls[0]["payload"]["category"] == "linear"
 
     def test_payload_symbol_at_gateway(self):
         spy = SpyPrivateApi()
         gw = _build_gateway(spy)
-        gw.execute(_make_request())
+        gw.execute(_make_execution_request())
         assert spy.calls[0]["payload"]["symbol"] == "BTCUSDT"
 
     def test_payload_side_at_gateway(self):
         spy = SpyPrivateApi()
         gw = _build_gateway(spy)
-        gw.execute(_make_request())
+        gw.execute(_make_execution_request())
         assert spy.calls[0]["payload"]["side"] == "Buy"
 
     def test_payload_order_type_at_gateway(self):
         spy = SpyPrivateApi()
         gw = _build_gateway(spy)
-        gw.execute(_make_request())
+        gw.execute(_make_execution_request())
         assert spy.calls[0]["payload"]["orderType"] == "Limit"
 
     def test_payload_qty_at_gateway(self):
         spy = SpyPrivateApi()
         gw = _build_gateway(spy)
-        gw.execute(_make_request())
+        gw.execute(_make_execution_request())
         assert spy.calls[0]["payload"]["qty"] == "0.001"
 
     def test_payload_price_at_gateway(self):
         spy = SpyPrivateApi()
         gw = _build_gateway(spy)
-        gw.execute(_make_request())
+        gw.execute(_make_execution_request())
         assert spy.calls[0]["payload"]["price"] == "50000"
 
     def test_does_not_return_bybit_response(self):
         spy = SpyPrivateApi()
         gw = _build_gateway(spy)
-        result = gw.execute(_make_request())
+        result = gw.execute(_make_execution_request())
         assert not isinstance(result, BybitResponse)
 
     def test_no_retry_on_success(self):
         spy = SpyPrivateApi()
         gw = _build_gateway(spy)
-        gw.execute(_make_request())
+        gw.execute(_make_execution_request())
         assert len(spy.calls) == 1
 
     def test_no_network_calls(self):
@@ -794,7 +826,7 @@ class TestGatewaySuccessFlow:
         try:
             spy = SpyPrivateApi()
             gw = _build_gateway(spy)
-            gw.execute(_make_request())
+            gw.execute(_make_execution_request())
         finally:
             socket.socket.connect = original_connect
 
@@ -809,50 +841,50 @@ class TestGatewayApiRejection:
     def test_propagates_bybit_api_error(self):
         gw = _build_gateway(RejectingPrivateApi())
         with pytest.raises(BybitApiError):
-            gw.execute(_make_request())
+            gw.execute(_make_execution_request())
 
     def test_error_ret_code_conserved(self):
         gw = _build_gateway(RejectingPrivateApi())
         with pytest.raises(BybitApiError) as exc_info:
-            gw.execute(_make_request())
+            gw.execute(_make_execution_request())
         assert exc_info.value.ret_code == 10001
 
     def test_error_ret_msg_conserved(self):
         gw = _build_gateway(RejectingPrivateApi())
         with pytest.raises(BybitApiError) as exc_info:
-            gw.execute(_make_request())
+            gw.execute(_make_execution_request())
         assert exc_info.value.ret_msg == "Request parameter error"
 
     def test_error_message_format(self):
         gw = _build_gateway(RejectingPrivateApi())
         with pytest.raises(BybitApiError) as exc_info:
-            gw.execute(_make_request())
+            gw.execute(_make_execution_request())
         assert str(exc_info.value) == "Bybit API error 10001: Request parameter error"
 
     def test_boundary_called_exactly_once_on_rejection(self):
         api = RejectingPrivateApi()
         gw = _build_gateway(api)
         with pytest.raises(BybitApiError):
-            gw.execute(_make_request())
+            gw.execute(_make_execution_request())
         assert api.call_count == 1
 
     def test_no_retry_on_rejection(self):
         api = RejectingPrivateApi()
         gw = _build_gateway(api)
         with pytest.raises(BybitApiError):
-            gw.execute(_make_request())
+            gw.execute(_make_execution_request())
         assert api.call_count == 1
 
     def test_no_fallback_returned(self):
         gw = _build_gateway(RejectingPrivateApi())
         with pytest.raises(BybitApiError):
-            gw.execute(_make_request())
+            gw.execute(_make_execution_request())
 
     def test_does_not_return_create_order_result(self):
         gw = _build_gateway(RejectingPrivateApi())
         caught = None
         try:
-            gw.execute(_make_request())
+            gw.execute(_make_execution_request())
         except BybitApiError as e:
             caught = e
         assert caught is not None
@@ -868,19 +900,19 @@ class TestGatewayInfrastructureError:
         transport_error = RuntimeError("simulated transport failure")
         gw = _build_gateway(ErrorPrivateApi(transport_error))
         with pytest.raises(RuntimeError) as exc_info:
-            gw.execute(_make_request())
+            gw.execute(_make_execution_request())
         assert exc_info.value is transport_error
 
     def test_exception_not_wrapped(self):
         gw = _build_gateway(ErrorPrivateApi(RuntimeError("raw error")))
         with pytest.raises(RuntimeError):
-            gw.execute(_make_request())
+            gw.execute(_make_execution_request())
 
     def test_exception_not_transformed_to_bybit_api_error(self):
         gw = _build_gateway(ErrorPrivateApi(RuntimeError("raw error")))
         with pytest.raises(RuntimeError):
             try:
-                gw.execute(_make_request())
+                gw.execute(_make_execution_request())
             except BybitApiError:
                 pytest.fail("RuntimeError must not be converted to BybitApiError")
 
@@ -888,14 +920,14 @@ class TestGatewayInfrastructureError:
         api = ErrorPrivateApi(OSError("connection refused"))
         gw = _build_gateway(api)
         with pytest.raises(OSError):
-            gw.execute(_make_request())
+            gw.execute(_make_execution_request())
         assert api.call_count == 1
 
     def test_no_retry_on_transport_error(self):
         api = ErrorPrivateApi(RuntimeError("fail"))
         gw = _build_gateway(api)
         with pytest.raises(RuntimeError):
-            gw.execute(_make_request())
+            gw.execute(_make_execution_request())
         assert api.call_count == 1
 
     def test_interpreter_not_called_on_transport_error(self, monkeypatch):
@@ -908,7 +940,7 @@ class TestGatewayInfrastructureError:
         )
         gw = _build_gateway(ErrorPrivateApi(RuntimeError("fail")))
         with pytest.raises(RuntimeError):
-            gw.execute(_make_request())
+            gw.execute(_make_execution_request())
         assert calls == []
 
 
@@ -921,36 +953,36 @@ class TestGatewayMultipleCalls:
         spy = SpyPrivateApi()
         gw = _build_gateway(spy)
 
-        spy._return_response = _make_success_response(order_id="A", order_link_id="link-1")
-        res1 = gw.execute(_make_request(order_link_id="link-1"))
+        spy._return_response = _make_success_response(order_id="A")
+        res1 = gw.execute(_make_execution_request(order_id="domain-1"))
 
-        spy._return_response = _make_success_response(order_id="B", order_link_id="link-2")
-        res2 = gw.execute(_make_request(order_link_id="link-2"))
+        spy._return_response = _make_success_response(order_id="B")
+        res2 = gw.execute(_make_execution_request(order_id="domain-2"))
 
-        assert res1.order_id == "A"
-        assert res2.order_id == "B"
+        assert res1.exchange_order_id == "A"
+        assert res2.exchange_order_id == "B"
         assert res1 is not res2
 
     def test_two_requests_produce_two_payloads(self):
         spy = SpyPrivateApi()
         gw = _build_gateway(spy)
-        gw.execute(_make_request(order_link_id="first"))
-        gw.execute(_make_request(order_link_id="second"))
+        gw.execute(_make_execution_request(order_id="first"))
+        gw.execute(_make_execution_request(order_id="second"))
         assert spy.calls[0]["payload"]["orderLinkId"] == "first"
         assert spy.calls[1]["payload"]["orderLinkId"] == "second"
 
     def test_boundary_called_twice_for_two_requests(self):
         spy = SpyPrivateApi()
         gw = _build_gateway(spy)
-        gw.execute(_make_request(order_link_id="l1"))
-        gw.execute(_make_request(order_link_id="l2"))
+        gw.execute(_make_execution_request(order_id="l1"))
+        gw.execute(_make_execution_request(order_id="l2"))
         assert len(spy.calls) == 2
 
     def test_order_of_calls_preserved(self):
         spy = SpyPrivateApi()
         gw = _build_gateway(spy)
-        gw.execute(_make_request(order_link_id="first"))
-        gw.execute(_make_request(order_link_id="second"))
+        gw.execute(_make_execution_request(order_id="first"))
+        gw.execute(_make_execution_request(order_id="second"))
         assert spy.calls[0]["payload"]["orderLinkId"] == "first"
         assert spy.calls[1]["payload"]["orderLinkId"] == "second"
 
@@ -959,21 +991,21 @@ class TestGatewayMultipleCalls:
         gw = _build_gateway(spy)
 
         spy._return_response = _make_success_response(order_id="first-order")
-        res1 = gw.execute(_make_request(order_link_id="l1"))
+        res1 = gw.execute(_make_execution_request(order_id="l1"))
 
         spy._return_response = _make_success_response(order_id="second-order")
-        res2 = gw.execute(_make_request(order_link_id="l2"))
+        res2 = gw.execute(_make_execution_request(order_id="l2"))
 
-        assert res1.order_id == "first-order"
-        assert res2.order_id == "second-order"
+        assert res1.exchange_order_id == "first-order"
+        assert res2.exchange_order_id == "second-order"
         assert res1 is not res2
 
     def test_order_id_not_mixed(self):
         spy = SpyPrivateApi()
         gw = _build_gateway(spy)
         spy._return_response = _make_success_response(order_id="X")
-        r1 = gw.execute(_make_request(order_link_id="l1"))
+        r1 = gw.execute(_make_execution_request(order_id="l1"))
         spy._return_response = _make_success_response(order_id="Y")
-        r2 = gw.execute(_make_request(order_link_id="l2"))
-        assert r1.order_id == "X"
-        assert r2.order_id == "Y"
+        r2 = gw.execute(_make_execution_request(order_id="l2"))
+        assert r1.exchange_order_id == "X"
+        assert r2.exchange_order_id == "Y"

@@ -7,6 +7,8 @@ from execution_gateway.contracts import ExecutionRequest, ExecutionResult
 from execution_gateway.gateway import ExecutionGateway
 from execution_gateway.dry_run_gateway import DryRunExecutionGateway
 from execution_gateway.bybit_gateway import BybitExecutionGateway
+from execution_gateway.bybit_create_order_request import BybitCreateOrderRequest
+from execution_gateway.bybit_create_order_result import BybitCreateOrderResult
 from execution_gateway.fake_gateway import FakeExecutionGateway
 import execution_gateway
 
@@ -32,9 +34,9 @@ class _ValidClient:
     def __init__(self):
         self.call_count = 0
 
-    def place_order(self, request: ExecutionRequest) -> ExecutionResult:
+    def place_order(self, request: BybitCreateOrderRequest) -> BybitCreateOrderResult:
         self.call_count += 1
-        return ExecutionResult(order_id=request.order_id, status="accepted")
+        return BybitCreateOrderResult(order_id="mock-order-id", order_link_id="mock-link-id")
 
 
 class _NoPlaceOrder:
@@ -133,8 +135,8 @@ def test_live_with_incompatible_client_raises_type_error():
 
 def test_no_explicit_inheritance_required():
     class AnotherClient:
-        def place_order(self, request: ExecutionRequest) -> ExecutionResult:
-            return ExecutionResult(order_id=request.order_id, status="accepted")
+        def place_order(self, request: BybitCreateOrderRequest) -> BybitCreateOrderResult:
+            return BybitCreateOrderResult(order_id="mock-order-id", order_link_id="mock-link-id")
 
     gw = create_execution_gateway(_live(), client=AnotherClient())
     assert isinstance(gw, BybitExecutionGateway)

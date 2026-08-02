@@ -121,3 +121,22 @@
 - `mainnet` no se implementará salvo decisión explícita futura.
 - No se agrega soporte preventivo para entornos no requeridos.
 - La validación es estricta y sensible a mayúsculas y minúsculas (`"DEMO"` y `"Demo"` son inválidos).
+
+---
+
+## ADR-001 — `ExecutionGateway` como Port del dominio; `BybitExecutionGateway` como Adapter
+
+**Fecha:** 2026-08-01
+**Decisión:** `ExecutionGateway` (Protocol) y sus contratos `ExecutionRequest`/`ExecutionResult` son el único vocabulario público del dominio para ejecutar órdenes. `BybitExecutionGateway` es un Adapter: traduce internamente `ExecutionRequest → BybitCreateOrderRequest` antes de invocar `BybitDemoClient.place_order`, y `BybitCreateOrderResult → ExecutionResult` al recibir la respuesta. Ningún tipo `Bybit*` cruza la frontera pública `execute(request: ExecutionRequest) -> ExecutionResult`.
+**Razón:** Una auditoría retrospectiva del núcleo (Auditoría A) encontró que `BybitExecutionGateway.execute` delegaba directamente `self._client.place_order(request)` sin traducir, por lo que en producción sólo aceptaba `BybitCreateOrderRequest` y devolvía `BybitCreateOrderResult` — incumpliendo la anotación pública del Protocol `ExecutionGateway`. `isinstance(gw, ExecutionGateway)` daba `True` pese a que el gateway rechazaba el tipo que el Protocol declara. Las otras dos implementaciones del mismo Protocol (`DryRunExecutionGateway`, `FakeExecutionGateway`) sí respetaban el contrato, por lo que las tres no eran intercambiables.
+**Mapeo de traducción (dentro de `BybitExecutionGateway`, único lugar donde ocurre):**
+- `side`: `"buy"/"sell"` → `"Buy"/"Sell"`; `order_type`: `"market"/"limit"` → `"Market"/"Limit"`.
+- `quantity`/`price`: `float` → `Decimal(str(valor))` (evita artefactos de precisión binaria).
+- `order_link_id` (Bybit) = `order_id` (dominio) — el id de dominio se reutiliza como clave de idempotencia del exchange.
+- `time_in_force="GTC"` y `reduce_only=False`: decisiones del adaptador: el dominio no modela estos conceptos.
+- `ExecutionResult.order_id` conserva el id de dominio original (no el id que genera Bybit); `ExecutionResult.exchange_order_id` transporta el id que devuelve Bybit; `status="accepted"` (el endpoint de creación de orden sólo confirma aceptación, no fill).
+**Consecuencias:**
+- Las tres implementaciones de `ExecutionGateway` (`DryRunExecutionGateway`, `FakeExecutionGateway`, `BybitExecutionGateway`) vuelven a ser intercambiables bajo el mismo Protocol.
+- Las excepciones (`BybitApiError`, errores de transporte) siguen propagándose sin envolver — el adaptador no introduce manejo de errores nuevo.
+- `gateway.py` y `contracts.py` no importan ningún tipo `Bybit*` (verificado con tests dedicados de pureza de dominio).
+- No se modificó ninguna factory inferior ni el Composition Root: la firma de `BybitExecutionGateway.__init__` no cambió.

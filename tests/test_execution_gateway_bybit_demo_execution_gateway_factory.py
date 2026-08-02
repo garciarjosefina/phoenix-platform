@@ -1,5 +1,4 @@
 import inspect
-from decimal import Decimal
 
 import pytest
 
@@ -7,7 +6,6 @@ from execution_gateway.bybit_api_error import BybitApiError
 from execution_gateway.bybit_client import BybitDemoClient
 from execution_gateway.bybit_create_order_operation import BybitCreateOrderOperation
 from execution_gateway.bybit_create_order_payload_builder import BybitCreateOrderPayloadBuilder
-from execution_gateway.bybit_create_order_request import BybitCreateOrderRequest
 from execution_gateway.bybit_create_order_response_interpreter import BybitCreateOrderResponseInterpreter
 from execution_gateway.bybit_create_order_result import BybitCreateOrderResult
 from execution_gateway.bybit_demo_client_factory import create_bybit_demo_client
@@ -20,6 +18,7 @@ from execution_gateway.bybit_gateway import BybitExecutionGateway
 from execution_gateway.bybit_private_api import BybitPrivateApi
 from execution_gateway.bybit_response import BybitResponse
 from execution_gateway.bybit_url_builder import BybitUrlBuilder
+from execution_gateway.contracts import ExecutionRequest, ExecutionResult
 import execution_gateway
 import execution_gateway.bybit_demo_execution_gateway_factory as _module
 
@@ -70,19 +69,17 @@ def _make_success_response(
     )
 
 
-def _make_request(
-    order_link_id: str = "gw-link-001",
-) -> BybitCreateOrderRequest:
-    return BybitCreateOrderRequest(
+def _make_execution_request(order_id: str = "gw-link-001", **overrides) -> ExecutionRequest:
+    kwargs = dict(
+        order_id=order_id,
         symbol="BTCUSDT",
-        side="Buy",
-        order_type="Limit",
-        quantity=Decimal("0.001"),
-        price=Decimal("50000"),
-        time_in_force="GTC",
-        reduce_only=False,
-        order_link_id=order_link_id,
+        side="buy",
+        order_type="limit",
+        quantity=0.001,
+        price=50_000.0,
     )
+    kwargs.update(overrides)
+    return ExecutionRequest(**kwargs)
 
 
 # ---------------------------------------------------------------------------
@@ -421,36 +418,48 @@ class TestNoExecutionDuringConstruction:
 # ---------------------------------------------------------------------------
 
 class TestIntegratedFlow:
-    def test_success_returns_bybit_create_order_result(self):
+    def test_success_returns_execution_result(self):
         spy = SpyPrivateApi()
         gw = create_bybit_demo_execution_gateway(private_api=spy)
-        result = gw.execute(_make_request())
-        assert isinstance(result, BybitCreateOrderResult)
+        result = gw.execute(_make_execution_request())
+        assert isinstance(result, ExecutionResult)
 
-    def test_order_id_conserved(self):
+    def test_does_not_return_bybit_create_order_result(self):
+        spy = SpyPrivateApi()
+        gw = create_bybit_demo_execution_gateway(private_api=spy)
+        result = gw.execute(_make_execution_request())
+        assert not isinstance(result, BybitCreateOrderResult)
+
+    def test_order_id_preserves_domain_identity(self):
         spy = SpyPrivateApi()
         spy._return_response = _make_success_response(order_id="factory-order-42")
         gw = create_bybit_demo_execution_gateway(private_api=spy)
-        result = gw.execute(_make_request())
-        assert result.order_id == "factory-order-42"
+        result = gw.execute(_make_execution_request(order_id="domain-order-1"))
+        assert result.order_id == "domain-order-1"
 
-    def test_order_link_id_conserved(self):
+    def test_exchange_order_id_carries_bybit_order_id(self):
         spy = SpyPrivateApi()
-        spy._return_response = _make_success_response(order_link_id="factory-link-xyz")
+        spy._return_response = _make_success_response(order_id="factory-order-42")
         gw = create_bybit_demo_execution_gateway(private_api=spy)
-        result = gw.execute(_make_request())
-        assert result.order_link_id == "factory-link-xyz"
+        result = gw.execute(_make_execution_request(order_id="domain-order-1"))
+        assert result.exchange_order_id == "factory-order-42"
+
+    def test_payload_order_link_id_uses_domain_order_id(self):
+        spy = SpyPrivateApi()
+        gw = create_bybit_demo_execution_gateway(private_api=spy)
+        gw.execute(_make_execution_request(order_id="domain-order-9"))
+        assert spy.calls[0]["payload"]["orderLinkId"] == "domain-order-9"
 
     def test_private_api_called_exactly_once(self):
         spy = SpyPrivateApi()
         gw = create_bybit_demo_execution_gateway(private_api=spy)
-        gw.execute(_make_request())
+        gw.execute(_make_execution_request())
         assert len(spy.calls) == 1
 
     def test_endpoint_path_correct(self):
         spy = SpyPrivateApi()
         gw = create_bybit_demo_execution_gateway(private_api=spy)
-        gw.execute(_make_request())
+        gw.execute(_make_execution_request())
         assert "/v5/order/create" in spy.calls[0]["url"]
 
     def test_endpoint_method_is_post(self):
@@ -459,47 +468,47 @@ class TestIntegratedFlow:
     def test_payload_symbol(self):
         spy = SpyPrivateApi()
         gw = create_bybit_demo_execution_gateway(private_api=spy)
-        gw.execute(_make_request())
+        gw.execute(_make_execution_request())
         assert spy.calls[0]["payload"]["symbol"] == "BTCUSDT"
 
     def test_payload_order_type(self):
         spy = SpyPrivateApi()
         gw = create_bybit_demo_execution_gateway(private_api=spy)
-        gw.execute(_make_request())
+        gw.execute(_make_execution_request())
         assert spy.calls[0]["payload"]["orderType"] == "Limit"
 
     def test_no_retry_on_success(self):
         spy = SpyPrivateApi()
         gw = create_bybit_demo_execution_gateway(private_api=spy)
-        gw.execute(_make_request())
+        gw.execute(_make_execution_request())
         assert len(spy.calls) == 1
 
     def test_rejected_response_raises_bybit_api_error(self):
         api = RejectingPrivateApi()
         gw = create_bybit_demo_execution_gateway(private_api=api)
         with pytest.raises(BybitApiError) as exc_info:
-            gw.execute(_make_request())
+            gw.execute(_make_execution_request())
         assert exc_info.value.ret_code == 10001
 
     def test_rejected_error_msg_conserved(self):
         api = RejectingPrivateApi()
         gw = create_bybit_demo_execution_gateway(private_api=api)
         with pytest.raises(BybitApiError) as exc_info:
-            gw.execute(_make_request())
+            gw.execute(_make_execution_request())
         assert exc_info.value.ret_msg == "Request parameter error"
 
     def test_no_retry_on_rejection(self):
         api = RejectingPrivateApi()
         gw = create_bybit_demo_execution_gateway(private_api=api)
         with pytest.raises(BybitApiError):
-            gw.execute(_make_request())
+            gw.execute(_make_execution_request())
         assert api.call_count == 1
 
     def test_no_fallback_on_rejection(self):
         api = RejectingPrivateApi()
         gw = create_bybit_demo_execution_gateway(private_api=api)
         with pytest.raises(BybitApiError):
-            gw.execute(_make_request())
+            gw.execute(_make_execution_request())
 
 
 # ---------------------------------------------------------------------------

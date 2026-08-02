@@ -3,9 +3,9 @@
 ## Estado actual
 
 **Versión:** `v0.1.0` (tag en `main`)
-**Tests:** 3372 passing
+**Tests:** 3411 passing
 **Rama activa:** `main`
-**Última actualización:** 2026-07-31
+**Última actualización:** 2026-08-01
 
 ---
 
@@ -115,6 +115,7 @@
 | 3.62-fix | Corrección post-auditoría (Opus): pruebas de identidad reales por `is`, sensibilidad a mutación, ausencia conductual de serialización/headers — 84 tests (solo tests, sin cambios en `platform/`) | `1844512` |
 | 3.63 | Configuración tipada e inmutable de Bybit Demo (`BybitDemoExecutionConfig`) — 111 tests | `3a5e59f` |
 | 3.64 | Composition root integral adaptado para recibir `BybitDemoExecutionConfig` (firma anterior eliminada) — 107 tests de la factory + 4 tests de orden de validación en el config | `857ebe4` |
+| ADR-001 | `ExecutionGateway` como Port del dominio; `BybitExecutionGateway` como Adapter (traducción `ExecutionRequest`↔`BybitCreateOrderRequest`/`ExecutionResult`↔`BybitCreateOrderResult`, sin exponer tipos Bybit fuera del adaptador) — 39 tests nuevos, 4 archivos de test migrados | pendiente |
 
 ### Próximo hito
 
