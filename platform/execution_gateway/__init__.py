@@ -58,6 +58,7 @@ from execution_gateway.configured_bybit_demo_execution_gateway_factory import (
     create_configured_bybit_demo_execution_gateway,
 )
 from execution_gateway.bybit_demo_execution_config import BybitDemoExecutionConfig
+from execution_gateway.execution_infrastructure_error import ExecutionInfrastructureError
 
 __all__ = [
     "__version__",
@@ -119,4 +120,5 @@ __all__ = [
     "create_bybit_demo_base_url",
     "create_configured_bybit_demo_execution_gateway",
     "BybitDemoExecutionConfig",
+    "ExecutionInfrastructureError",
 ]

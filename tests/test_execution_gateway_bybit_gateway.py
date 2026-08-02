@@ -7,9 +7,11 @@ import pytest
 import execution_gateway
 from execution_gateway.bybit_gateway import BybitExecutionGateway
 import execution_gateway.bybit_gateway as _module
+from execution_gateway.bybit_api_error import BybitApiError
 from execution_gateway.bybit_client import BybitDemoClient
 from execution_gateway.bybit_create_order_request import BybitCreateOrderRequest
 from execution_gateway.bybit_create_order_result import BybitCreateOrderResult
+from execution_gateway.execution_infrastructure_error import ExecutionInfrastructureError
 from execution_gateway.gateway import ExecutionGateway
 from execution_gateway.contracts import ExecutionRequest, ExecutionResult
 
@@ -251,6 +253,74 @@ class TestResultTranslation:
         assert result.error_message is None
 
 
+# ---------------------------------------------------------------------------
+# Traducción: BybitApiError (rechazo de negocio) -> ExecutionResult(status="rejected")
+# ---------------------------------------------------------------------------
+
+class _RejectingClient:
+    def __init__(self, error: BybitApiError):
+        self._error = error
+        self.call_count = 0
+
+    def place_order(self, request: BybitCreateOrderRequest) -> BybitCreateOrderResult:
+        self.call_count += 1
+        raise self._error
+
+
+class TestBusinessRejectionTranslation:
+    def test_rejection_does_not_raise(self):
+        client = _RejectingClient(BybitApiError(ret_code=10001, ret_msg="Request parameter error"))
+        gw = BybitExecutionGateway(client=client)
+        result = gw.execute(_make_request())
+        assert isinstance(result, ExecutionResult)
+
+    def test_rejection_does_not_raise_bybit_api_error(self):
+        client = _RejectingClient(BybitApiError(ret_code=10001, ret_msg="Request parameter error"))
+        gw = BybitExecutionGateway(client=client)
+        try:
+            gw.execute(_make_request())
+        except BybitApiError:
+            pytest.fail("BybitApiError must not cross the ExecutionGateway boundary")
+
+    def test_rejection_status_is_rejected(self):
+        client = _RejectingClient(BybitApiError(ret_code=10001, ret_msg="Request parameter error"))
+        gw = BybitExecutionGateway(client=client)
+        result = gw.execute(_make_request())
+        assert result.status == "rejected"
+
+    def test_rejection_error_message_carries_ret_msg(self):
+        client = _RejectingClient(BybitApiError(ret_code=10001, ret_msg="Request parameter error"))
+        gw = BybitExecutionGateway(client=client)
+        result = gw.execute(_make_request())
+        assert result.error_message == "Request parameter error"
+
+    def test_rejection_preserves_domain_order_id(self):
+        client = _RejectingClient(BybitApiError(ret_code=10001, ret_msg="bad params"))
+        gw = BybitExecutionGateway(client=client)
+        result = gw.execute(_make_request(order_id="dom-77"))
+        assert result.order_id == "dom-77"
+
+    def test_rejection_has_no_exchange_order_id(self):
+        client = _RejectingClient(BybitApiError(ret_code=10001, ret_msg="bad params"))
+        gw = BybitExecutionGateway(client=client)
+        result = gw.execute(_make_request())
+        assert result.exchange_order_id is None
+
+    def test_rejection_calls_client_exactly_once(self):
+        client = _RejectingClient(BybitApiError(ret_code=10001, ret_msg="bad params"))
+        gw = BybitExecutionGateway(client=client)
+        gw.execute(_make_request())
+        assert client.call_count == 1
+
+    def test_different_ret_codes_translate_to_rejected(self):
+        for ret_code, ret_msg in [(10001, "params error"), (110001, "order not exists")]:
+            client = _RejectingClient(BybitApiError(ret_code=ret_code, ret_msg=ret_msg))
+            gw = BybitExecutionGateway(client=client)
+            result = gw.execute(_make_request())
+            assert result.status == "rejected"
+            assert result.error_message == ret_msg
+
+
 class TestDelegation:
     def test_execute_delegates_to_place_order(self):
         client = _ValidClient(_make_bybit_result())
@@ -272,7 +342,7 @@ class TestDelegation:
         gw.execute(_make_request("ord_2"))
         assert client.received_requests[0] is not client.received_requests[1]
 
-    def test_exception_propagates_by_identity(self):
+    def test_infrastructure_exception_wrapped_with_original_as_cause(self):
         marker = RuntimeError("network failure")
 
         class RaisingClient:
@@ -280,19 +350,19 @@ class TestDelegation:
                 raise marker
 
         gw = BybitExecutionGateway(client=RaisingClient())
-        with pytest.raises(RuntimeError) as exc_info:
+        with pytest.raises(ExecutionInfrastructureError) as exc_info:
             gw.execute(_make_request())
-        assert exc_info.value is marker
+        assert exc_info.value.__cause__ is marker
 
-    def test_exception_not_wrapped(self):
+    def test_infrastructure_exception_message_conserved(self):
         class RaisingClient:
             def place_order(self, request: BybitCreateOrderRequest) -> BybitCreateOrderResult:
                 raise RuntimeError("network failure")
 
         gw = BybitExecutionGateway(client=RaisingClient())
-        with pytest.raises(RuntimeError) as exc_info:
+        with pytest.raises(ExecutionInfrastructureError) as exc_info:
             gw.execute(_make_request())
-        assert exc_info.value.__cause__ is None
+        assert str(exc_info.value) == "network failure"
 
 
 class TestNoSideEffects:

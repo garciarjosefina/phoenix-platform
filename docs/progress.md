@@ -3,7 +3,7 @@
 ## Estado actual
 
 **Versión:** `v0.1.0` (tag en `main`)
-**Tests:** 3411 passing
+**Tests:** 3463 passing
 **Rama activa:** `main`
 **Última actualización:** 2026-08-01
 
@@ -116,6 +116,7 @@
 | 3.63 | Configuración tipada e inmutable de Bybit Demo (`BybitDemoExecutionConfig`) — 111 tests | `3a5e59f` |
 | 3.64 | Composition root integral adaptado para recibir `BybitDemoExecutionConfig` (firma anterior eliminada) — 107 tests de la factory + 4 tests de orden de validación en el config | `857ebe4` |
 | ADR-001 | `ExecutionGateway` como Port del dominio; `BybitExecutionGateway` como Adapter (traducción `ExecutionRequest`↔`BybitCreateOrderRequest`/`ExecutionResult`↔`BybitCreateOrderResult`, sin exponer tipos Bybit fuera del adaptador) — 39 tests nuevos, 4 archivos de test migrados | `2ac7678` |
+| ADR-001A | Camino de error del Port desacoplado de Bybit: `BybitApiError` (rechazo de negocio) se traduce a `ExecutionResult(status="rejected")`; excepciones de infraestructura se traducen a `ExecutionInfrastructureError` (nuevo tipo de dominio, `message: str`, encadenada vía `__cause__`) — ningún tipo `Bybit*` cruza `execute()` en ningún camino | pendiente |
 
 ### Próximo hito
 

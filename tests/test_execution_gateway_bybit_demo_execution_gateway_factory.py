@@ -2,7 +2,6 @@ import inspect
 
 import pytest
 
-from execution_gateway.bybit_api_error import BybitApiError
 from execution_gateway.bybit_client import BybitDemoClient
 from execution_gateway.bybit_create_order_operation import BybitCreateOrderOperation
 from execution_gateway.bybit_create_order_payload_builder import BybitCreateOrderPayloadBuilder
@@ -483,32 +482,30 @@ class TestIntegratedFlow:
         gw.execute(_make_execution_request())
         assert len(spy.calls) == 1
 
-    def test_rejected_response_raises_bybit_api_error(self):
+    def test_rejected_response_returns_rejected_execution_result(self):
         api = RejectingPrivateApi()
         gw = create_bybit_demo_execution_gateway(private_api=api)
-        with pytest.raises(BybitApiError) as exc_info:
-            gw.execute(_make_execution_request())
-        assert exc_info.value.ret_code == 10001
+        result = gw.execute(_make_execution_request())
+        assert isinstance(result, ExecutionResult)
+        assert result.status == "rejected"
 
     def test_rejected_error_msg_conserved(self):
         api = RejectingPrivateApi()
         gw = create_bybit_demo_execution_gateway(private_api=api)
-        with pytest.raises(BybitApiError) as exc_info:
-            gw.execute(_make_execution_request())
-        assert exc_info.value.ret_msg == "Request parameter error"
+        result = gw.execute(_make_execution_request())
+        assert result.error_message == "Request parameter error"
 
     def test_no_retry_on_rejection(self):
         api = RejectingPrivateApi()
         gw = create_bybit_demo_execution_gateway(private_api=api)
-        with pytest.raises(BybitApiError):
-            gw.execute(_make_execution_request())
+        gw.execute(_make_execution_request())
         assert api.call_count == 1
 
-    def test_no_fallback_on_rejection(self):
+    def test_no_exception_raised_on_rejection(self):
         api = RejectingPrivateApi()
         gw = create_bybit_demo_execution_gateway(private_api=api)
-        with pytest.raises(BybitApiError):
-            gw.execute(_make_execution_request())
+        result = gw.execute(_make_execution_request())
+        assert isinstance(result, ExecutionResult)
 
 
 # ---------------------------------------------------------------------------

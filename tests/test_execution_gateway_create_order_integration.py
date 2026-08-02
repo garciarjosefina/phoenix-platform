@@ -42,6 +42,7 @@ from execution_gateway.bybit_private_api import BybitPrivateApi
 from execution_gateway.bybit_response import BybitResponse
 from execution_gateway.bybit_url_builder import BybitUrlBuilder
 from execution_gateway.contracts import ExecutionRequest, ExecutionResult
+from execution_gateway.execution_infrastructure_error import ExecutionInfrastructureError
 
 
 # ---------------------------------------------------------------------------
@@ -838,57 +839,54 @@ class TestGatewaySuccessFlow:
 # ---------------------------------------------------------------------------
 
 class TestGatewayApiRejection:
-    def test_propagates_bybit_api_error(self):
+    def test_rejection_does_not_raise_bybit_api_error(self):
         gw = _build_gateway(RejectingPrivateApi())
-        with pytest.raises(BybitApiError):
+        try:
             gw.execute(_make_execution_request())
+        except BybitApiError:
+            pytest.fail("BybitApiError must not cross the ExecutionGateway boundary")
 
-    def test_error_ret_code_conserved(self):
+    def test_rejection_returns_execution_result(self):
         gw = _build_gateway(RejectingPrivateApi())
-        with pytest.raises(BybitApiError) as exc_info:
-            gw.execute(_make_execution_request())
-        assert exc_info.value.ret_code == 10001
+        result = gw.execute(_make_execution_request())
+        assert isinstance(result, ExecutionResult)
 
-    def test_error_ret_msg_conserved(self):
+    def test_rejection_status_is_rejected(self):
         gw = _build_gateway(RejectingPrivateApi())
-        with pytest.raises(BybitApiError) as exc_info:
-            gw.execute(_make_execution_request())
-        assert exc_info.value.ret_msg == "Request parameter error"
+        result = gw.execute(_make_execution_request())
+        assert result.status == "rejected"
 
-    def test_error_message_format(self):
+    def test_rejection_error_message_carries_ret_msg(self):
         gw = _build_gateway(RejectingPrivateApi())
-        with pytest.raises(BybitApiError) as exc_info:
-            gw.execute(_make_execution_request())
-        assert str(exc_info.value) == "Bybit API error 10001: Request parameter error"
+        result = gw.execute(_make_execution_request())
+        assert result.error_message == "Request parameter error"
+
+    def test_rejection_preserves_domain_order_id(self):
+        gw = _build_gateway(RejectingPrivateApi())
+        result = gw.execute(_make_execution_request(order_id="domain-77"))
+        assert result.order_id == "domain-77"
+
+    def test_rejection_has_no_exchange_order_id(self):
+        gw = _build_gateway(RejectingPrivateApi())
+        result = gw.execute(_make_execution_request())
+        assert result.exchange_order_id is None
 
     def test_boundary_called_exactly_once_on_rejection(self):
         api = RejectingPrivateApi()
         gw = _build_gateway(api)
-        with pytest.raises(BybitApiError):
-            gw.execute(_make_execution_request())
+        gw.execute(_make_execution_request())
         assert api.call_count == 1
 
     def test_no_retry_on_rejection(self):
         api = RejectingPrivateApi()
         gw = _build_gateway(api)
-        with pytest.raises(BybitApiError):
-            gw.execute(_make_execution_request())
+        gw.execute(_make_execution_request())
         assert api.call_count == 1
-
-    def test_no_fallback_returned(self):
-        gw = _build_gateway(RejectingPrivateApi())
-        with pytest.raises(BybitApiError):
-            gw.execute(_make_execution_request())
 
     def test_does_not_return_create_order_result(self):
         gw = _build_gateway(RejectingPrivateApi())
-        caught = None
-        try:
-            gw.execute(_make_execution_request())
-        except BybitApiError as e:
-            caught = e
-        assert caught is not None
-        assert not isinstance(caught, BybitCreateOrderResult)
+        result = gw.execute(_make_execution_request())
+        assert not isinstance(result, BybitCreateOrderResult)
 
 
 # ---------------------------------------------------------------------------
@@ -896,21 +894,28 @@ class TestGatewayApiRejection:
 # ---------------------------------------------------------------------------
 
 class TestGatewayInfrastructureError:
-    def test_exception_propagates_by_identity(self):
+    def test_exception_translated_to_execution_infrastructure_error(self):
         transport_error = RuntimeError("simulated transport failure")
         gw = _build_gateway(ErrorPrivateApi(transport_error))
-        with pytest.raises(RuntimeError) as exc_info:
+        with pytest.raises(ExecutionInfrastructureError):
             gw.execute(_make_execution_request())
-        assert exc_info.value is transport_error
 
-    def test_exception_not_wrapped(self):
-        gw = _build_gateway(ErrorPrivateApi(RuntimeError("raw error")))
-        with pytest.raises(RuntimeError):
+    def test_original_exception_conserved_as_cause(self):
+        transport_error = RuntimeError("simulated transport failure")
+        gw = _build_gateway(ErrorPrivateApi(transport_error))
+        with pytest.raises(ExecutionInfrastructureError) as exc_info:
             gw.execute(_make_execution_request())
+        assert exc_info.value.__cause__ is transport_error
+
+    def test_message_conserved(self):
+        gw = _build_gateway(ErrorPrivateApi(RuntimeError("raw error")))
+        with pytest.raises(ExecutionInfrastructureError) as exc_info:
+            gw.execute(_make_execution_request())
+        assert str(exc_info.value) == "raw error"
 
     def test_exception_not_transformed_to_bybit_api_error(self):
         gw = _build_gateway(ErrorPrivateApi(RuntimeError("raw error")))
-        with pytest.raises(RuntimeError):
+        with pytest.raises(ExecutionInfrastructureError):
             try:
                 gw.execute(_make_execution_request())
             except BybitApiError:
@@ -919,14 +924,14 @@ class TestGatewayInfrastructureError:
     def test_boundary_called_exactly_once_on_error(self):
         api = ErrorPrivateApi(OSError("connection refused"))
         gw = _build_gateway(api)
-        with pytest.raises(OSError):
+        with pytest.raises(ExecutionInfrastructureError):
             gw.execute(_make_execution_request())
         assert api.call_count == 1
 
     def test_no_retry_on_transport_error(self):
         api = ErrorPrivateApi(RuntimeError("fail"))
         gw = _build_gateway(api)
-        with pytest.raises(RuntimeError):
+        with pytest.raises(ExecutionInfrastructureError):
             gw.execute(_make_execution_request())
         assert api.call_count == 1
 
@@ -939,7 +944,7 @@ class TestGatewayInfrastructureError:
             lambda self, *, response: calls.append(response) or original(self, response=response),
         )
         gw = _build_gateway(ErrorPrivateApi(RuntimeError("fail")))
-        with pytest.raises(RuntimeError):
+        with pytest.raises(ExecutionInfrastructureError):
             gw.execute(_make_execution_request())
         assert calls == []
 
