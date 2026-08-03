@@ -145,6 +145,24 @@ class TestBybitAuthentication:
         auth = _valid_auth()
         assert "secret" not in repr(auth).lower()
 
+    def test_repr_does_not_expose_signature_value(self):
+        marker = "ZZSIGNATUREMARKER9999"
+        auth = _valid_auth(signature=marker)
+        assert marker not in repr(auth)
+
+    def test_str_does_not_expose_signature_value(self):
+        marker = "ZZSTRSIGNATUREMARKER9999"
+        auth = _valid_auth(signature=marker)
+        assert marker not in str(auth)
+
+    def test_signature_still_accessible_as_attribute(self):
+        auth = _valid_auth(signature="my-signature")
+        assert auth.signature == "my-signature"
+
+    def test_repr_still_shows_api_key(self):
+        auth = _valid_auth(api_key="visible-key")
+        assert "visible-key" in repr(auth)
+
 
 class TestBybitAuthenticator:
     def test_runtime_checkable_valid(self):

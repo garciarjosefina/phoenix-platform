@@ -729,20 +729,21 @@ class TestGatewaySuccessFlow:
 
     def test_order_id_preserves_domain_identity(self):
         spy = SpyPrivateApi()
-        spy._return_response = _make_success_response(order_id="gw-order-456")
+        spy._return_response = _make_success_response(order_id="gw-order-456", order_link_id="domain-order-1")
         gw = _build_gateway(spy)
         result = gw.execute(_make_execution_request(order_id="domain-order-1"))
         assert result.order_id == "domain-order-1"
 
     def test_exchange_order_id_carries_bybit_order_id(self):
         spy = SpyPrivateApi()
-        spy._return_response = _make_success_response(order_id="gw-order-456")
+        spy._return_response = _make_success_response(order_id="gw-order-456", order_link_id="domain-order-1")
         gw = _build_gateway(spy)
         result = gw.execute(_make_execution_request(order_id="domain-order-1"))
         assert result.exchange_order_id == "gw-order-456"
 
     def test_payload_order_link_id_uses_domain_order_id(self):
         spy = SpyPrivateApi()
+        spy._return_response = _make_success_response(order_link_id="domain-order-9")
         gw = _build_gateway(spy)
         gw.execute(_make_execution_request(order_id="domain-order-9"))
         assert spy.calls[0]["payload"]["orderLinkId"] == "domain-order-9"
@@ -895,31 +896,38 @@ class TestGatewayApiRejection:
 
 class TestGatewayInfrastructureError:
     def test_exception_translated_to_execution_infrastructure_error(self):
-        transport_error = RuntimeError("simulated transport failure")
+        transport_error = OSError("simulated transport failure")
         gw = _build_gateway(ErrorPrivateApi(transport_error))
         with pytest.raises(ExecutionInfrastructureError):
             gw.execute(_make_execution_request())
 
     def test_original_exception_conserved_as_cause(self):
-        transport_error = RuntimeError("simulated transport failure")
+        transport_error = OSError("simulated transport failure")
         gw = _build_gateway(ErrorPrivateApi(transport_error))
         with pytest.raises(ExecutionInfrastructureError) as exc_info:
             gw.execute(_make_execution_request())
         assert exc_info.value.__cause__ is transport_error
 
-    def test_message_conserved(self):
-        gw = _build_gateway(ErrorPrivateApi(RuntimeError("raw error")))
+    def test_message_is_safe_constant(self):
+        gw = _build_gateway(ErrorPrivateApi(OSError("raw error with secret detail")))
         with pytest.raises(ExecutionInfrastructureError) as exc_info:
             gw.execute(_make_execution_request())
-        assert str(exc_info.value) == "raw error"
+        assert "raw error with secret detail" not in str(exc_info.value)
+
+    def test_json_decode_error_translated(self):
+        import json
+        malformed = json.JSONDecodeError("Expecting value", "not json", 0)
+        gw = _build_gateway(ErrorPrivateApi(malformed))
+        with pytest.raises(ExecutionInfrastructureError):
+            gw.execute(_make_execution_request())
 
     def test_exception_not_transformed_to_bybit_api_error(self):
-        gw = _build_gateway(ErrorPrivateApi(RuntimeError("raw error")))
+        gw = _build_gateway(ErrorPrivateApi(OSError("raw error")))
         with pytest.raises(ExecutionInfrastructureError):
             try:
                 gw.execute(_make_execution_request())
             except BybitApiError:
-                pytest.fail("RuntimeError must not be converted to BybitApiError")
+                pytest.fail("OSError must not be converted to BybitApiError")
 
     def test_boundary_called_exactly_once_on_error(self):
         api = ErrorPrivateApi(OSError("connection refused"))
@@ -929,7 +937,7 @@ class TestGatewayInfrastructureError:
         assert api.call_count == 1
 
     def test_no_retry_on_transport_error(self):
-        api = ErrorPrivateApi(RuntimeError("fail"))
+        api = ErrorPrivateApi(OSError("fail"))
         gw = _build_gateway(api)
         with pytest.raises(ExecutionInfrastructureError):
             gw.execute(_make_execution_request())
@@ -943,10 +951,50 @@ class TestGatewayInfrastructureError:
             "interpret",
             lambda self, *, response: calls.append(response) or original(self, response=response),
         )
-        gw = _build_gateway(ErrorPrivateApi(RuntimeError("fail")))
+        gw = _build_gateway(ErrorPrivateApi(OSError("fail")))
         with pytest.raises(ExecutionInfrastructureError):
             gw.execute(_make_execution_request())
         assert calls == []
+
+
+# ---------------------------------------------------------------------------
+# B.4b. Errores de programación desde el gateway — no deben envolverse
+# ---------------------------------------------------------------------------
+
+class TestGatewayProgrammingErrorsPropagateUnwrapped:
+    def test_type_error_propagates_unwrapped(self):
+        gw = _build_gateway(ErrorPrivateApi(TypeError("bug")))
+        with pytest.raises(TypeError):
+            gw.execute(_make_execution_request())
+
+    def test_attribute_error_propagates_unwrapped(self):
+        gw = _build_gateway(ErrorPrivateApi(AttributeError("no such attr")))
+        with pytest.raises(AttributeError):
+            gw.execute(_make_execution_request())
+
+    def test_key_error_propagates_unwrapped(self):
+        gw = _build_gateway(ErrorPrivateApi(KeyError("orderId")))
+        with pytest.raises(KeyError):
+            gw.execute(_make_execution_request())
+
+    def test_assertion_error_propagates_unwrapped(self):
+        gw = _build_gateway(ErrorPrivateApi(AssertionError("invariant broken")))
+        with pytest.raises(AssertionError):
+            gw.execute(_make_execution_request())
+
+    def test_bare_runtime_error_propagates_unwrapped(self):
+        gw = _build_gateway(ErrorPrivateApi(RuntimeError("unexpected")))
+        with pytest.raises(RuntimeError):
+            gw.execute(_make_execution_request())
+
+    def test_programming_errors_not_disguised_as_infrastructure_error(self):
+        gw = _build_gateway(ErrorPrivateApi(TypeError("bug")))
+        try:
+            gw.execute(_make_execution_request())
+        except ExecutionInfrastructureError:
+            pytest.fail("TypeError must not be disguised as ExecutionInfrastructureError")
+        except TypeError:
+            pass
 
 
 # ---------------------------------------------------------------------------
@@ -958,10 +1006,10 @@ class TestGatewayMultipleCalls:
         spy = SpyPrivateApi()
         gw = _build_gateway(spy)
 
-        spy._return_response = _make_success_response(order_id="A")
+        spy._return_response = _make_success_response(order_id="A", order_link_id="domain-1")
         res1 = gw.execute(_make_execution_request(order_id="domain-1"))
 
-        spy._return_response = _make_success_response(order_id="B")
+        spy._return_response = _make_success_response(order_id="B", order_link_id="domain-2")
         res2 = gw.execute(_make_execution_request(order_id="domain-2"))
 
         assert res1.exchange_order_id == "A"
@@ -971,7 +1019,9 @@ class TestGatewayMultipleCalls:
     def test_two_requests_produce_two_payloads(self):
         spy = SpyPrivateApi()
         gw = _build_gateway(spy)
+        spy._return_response = _make_success_response(order_link_id="first")
         gw.execute(_make_execution_request(order_id="first"))
+        spy._return_response = _make_success_response(order_link_id="second")
         gw.execute(_make_execution_request(order_id="second"))
         assert spy.calls[0]["payload"]["orderLinkId"] == "first"
         assert spy.calls[1]["payload"]["orderLinkId"] == "second"
@@ -979,14 +1029,18 @@ class TestGatewayMultipleCalls:
     def test_boundary_called_twice_for_two_requests(self):
         spy = SpyPrivateApi()
         gw = _build_gateway(spy)
+        spy._return_response = _make_success_response(order_link_id="l1")
         gw.execute(_make_execution_request(order_id="l1"))
+        spy._return_response = _make_success_response(order_link_id="l2")
         gw.execute(_make_execution_request(order_id="l2"))
         assert len(spy.calls) == 2
 
     def test_order_of_calls_preserved(self):
         spy = SpyPrivateApi()
         gw = _build_gateway(spy)
+        spy._return_response = _make_success_response(order_link_id="first")
         gw.execute(_make_execution_request(order_id="first"))
+        spy._return_response = _make_success_response(order_link_id="second")
         gw.execute(_make_execution_request(order_id="second"))
         assert spy.calls[0]["payload"]["orderLinkId"] == "first"
         assert spy.calls[1]["payload"]["orderLinkId"] == "second"
@@ -995,10 +1049,10 @@ class TestGatewayMultipleCalls:
         spy = SpyPrivateApi()
         gw = _build_gateway(spy)
 
-        spy._return_response = _make_success_response(order_id="first-order")
+        spy._return_response = _make_success_response(order_id="first-order", order_link_id="l1")
         res1 = gw.execute(_make_execution_request(order_id="l1"))
 
-        spy._return_response = _make_success_response(order_id="second-order")
+        spy._return_response = _make_success_response(order_id="second-order", order_link_id="l2")
         res2 = gw.execute(_make_execution_request(order_id="l2"))
 
         assert res1.exchange_order_id == "first-order"
@@ -1008,9 +1062,9 @@ class TestGatewayMultipleCalls:
     def test_order_id_not_mixed(self):
         spy = SpyPrivateApi()
         gw = _build_gateway(spy)
-        spy._return_response = _make_success_response(order_id="X")
+        spy._return_response = _make_success_response(order_id="X", order_link_id="l1")
         r1 = gw.execute(_make_execution_request(order_id="l1"))
-        spy._return_response = _make_success_response(order_id="Y")
+        spy._return_response = _make_success_response(order_id="Y", order_link_id="l2")
         r2 = gw.execute(_make_execution_request(order_id="l2"))
         assert r1.exchange_order_id == "X"
         assert r2.exchange_order_id == "Y"

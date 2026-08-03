@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
 
 
@@ -7,7 +7,7 @@ class BybitAuthentication:
     timestamp_ms: int
     api_key: str
     recv_window_ms: int
-    signature: str
+    signature: str = field(repr=False)
 
     def __post_init__(self) -> None:
         if isinstance(self.timestamp_ms, bool) or not isinstance(self.timestamp_ms, int):

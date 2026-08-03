@@ -96,6 +96,85 @@ def test_rejects_negative_timeout():
         GatewayConfig(timeout_seconds=-5)
 
 
+# ── validación estricta de tipos (Core Hardening Pack A, Parte G) ─────────
+
+def test_rejects_non_str_environment():
+    with pytest.raises(TypeError, match="environment must be str"):
+        GatewayConfig(environment=123)
+
+
+def test_rejects_none_environment():
+    with pytest.raises(TypeError, match="environment must be str"):
+        GatewayConfig(environment=None)
+
+
+def test_rejects_whitespace_only_environment():
+    with pytest.raises(ValueError, match="environment must not be empty or whitespace-only"):
+        GatewayConfig(environment="   ")
+
+
+def test_environment_not_stripped():
+    with pytest.raises(ValueError):
+        GatewayConfig(environment=" demo ")
+
+
+def test_rejects_string_dry_run():
+    with pytest.raises(TypeError, match="dry_run must be bool"):
+        GatewayConfig(dry_run="false")
+
+
+def test_rejects_string_true_dry_run():
+    with pytest.raises(TypeError, match="dry_run must be bool"):
+        GatewayConfig(dry_run="true")
+
+
+def test_rejects_int_one_dry_run():
+    with pytest.raises(TypeError, match="dry_run must be bool"):
+        GatewayConfig(dry_run=1)
+
+
+def test_rejects_int_zero_dry_run():
+    with pytest.raises(TypeError, match="dry_run must be bool"):
+        GatewayConfig(dry_run=0)
+
+
+def test_rejects_none_dry_run():
+    with pytest.raises(TypeError, match="dry_run must be bool"):
+        GatewayConfig(dry_run=None)
+
+
+def test_accepts_bool_true_dry_run():
+    assert GatewayConfig(dry_run=True).dry_run is True
+
+
+def test_accepts_bool_false_dry_run():
+    assert GatewayConfig(dry_run=False).dry_run is False
+
+
+def test_rejects_bool_timeout_seconds():
+    with pytest.raises(TypeError, match="timeout_seconds must be int"):
+        GatewayConfig(timeout_seconds=True)
+
+
+def test_rejects_float_timeout_seconds():
+    with pytest.raises(TypeError, match="timeout_seconds must be int"):
+        GatewayConfig(timeout_seconds=1.5)
+
+
+def test_rejects_string_timeout_seconds():
+    with pytest.raises(TypeError, match="timeout_seconds must be int"):
+        GatewayConfig(timeout_seconds="10")
+
+
+def test_rejects_none_timeout_seconds():
+    with pytest.raises(TypeError, match="timeout_seconds must be int"):
+        GatewayConfig(timeout_seconds=None)
+
+
+def test_accepts_valid_int_timeout_seconds():
+    assert GatewayConfig(timeout_seconds=30).timeout_seconds == 30
+
+
 # ── inmutabilidad ──────────────────────────────────────────────────────────
 
 def test_immutability():

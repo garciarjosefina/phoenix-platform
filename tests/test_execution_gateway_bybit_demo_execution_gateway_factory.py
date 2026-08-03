@@ -431,20 +431,21 @@ class TestIntegratedFlow:
 
     def test_order_id_preserves_domain_identity(self):
         spy = SpyPrivateApi()
-        spy._return_response = _make_success_response(order_id="factory-order-42")
+        spy._return_response = _make_success_response(order_id="factory-order-42", order_link_id="domain-order-1")
         gw = create_bybit_demo_execution_gateway(private_api=spy)
         result = gw.execute(_make_execution_request(order_id="domain-order-1"))
         assert result.order_id == "domain-order-1"
 
     def test_exchange_order_id_carries_bybit_order_id(self):
         spy = SpyPrivateApi()
-        spy._return_response = _make_success_response(order_id="factory-order-42")
+        spy._return_response = _make_success_response(order_id="factory-order-42", order_link_id="domain-order-1")
         gw = create_bybit_demo_execution_gateway(private_api=spy)
         result = gw.execute(_make_execution_request(order_id="domain-order-1"))
         assert result.exchange_order_id == "factory-order-42"
 
     def test_payload_order_link_id_uses_domain_order_id(self):
         spy = SpyPrivateApi()
+        spy._return_response = _make_success_response(order_link_id="domain-order-9")
         gw = create_bybit_demo_execution_gateway(private_api=spy)
         gw.execute(_make_execution_request(order_id="domain-order-9"))
         assert spy.calls[0]["payload"]["orderLinkId"] == "domain-order-9"

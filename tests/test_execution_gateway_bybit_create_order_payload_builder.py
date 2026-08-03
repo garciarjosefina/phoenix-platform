@@ -266,12 +266,20 @@ class TestDecimalConversion:
     def test_market_qty_small_decimal(self):
         qty = Decimal("0.00000001")
         result = _builder().build(request=_market(quantity=qty))
-        assert result["qty"] == str(qty)
+        assert result["qty"] == "0.00000001"
 
-    def test_market_qty_exponential_notation_preserved(self):
+    def test_market_qty_exponential_input_rendered_plain(self):
         qty = Decimal("1E-8")
         result = _builder().build(request=_market(quantity=qty))
-        assert result["qty"] == str(qty)
+        assert result["qty"] == "0.00000001"
+        assert "E" not in result["qty"]
+        assert "e" not in result["qty"]
+
+    def test_market_qty_large_exponential_input_rendered_plain(self):
+        qty = Decimal("1E+16")
+        result = _builder().build(request=_market(quantity=qty))
+        assert result["qty"] == "10000000000000000"
+        assert "E" not in result["qty"]
 
     def test_limit_qty_str_conversion(self):
         result = _builder().build(request=_limit(quantity=Decimal("2.5")))

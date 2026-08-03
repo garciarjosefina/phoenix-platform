@@ -59,6 +59,7 @@ from execution_gateway.configured_bybit_demo_execution_gateway_factory import (
 )
 from execution_gateway.bybit_demo_execution_config import BybitDemoExecutionConfig
 from execution_gateway.execution_infrastructure_error import ExecutionInfrastructureError
+from execution_gateway.execution_request_not_supported_error import ExecutionRequestNotSupportedError
 
 __all__ = [
     "__version__",
@@ -121,4 +122,5 @@ __all__ = [
     "create_configured_bybit_demo_execution_gateway",
     "BybitDemoExecutionConfig",
     "ExecutionInfrastructureError",
+    "ExecutionRequestNotSupportedError",
 ]

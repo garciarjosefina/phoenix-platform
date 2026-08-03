@@ -137,8 +137,93 @@ class TestHeadersIsolation:
         original["X-Key"] = "mutated"
         assert r.headers["X-Key"] == "val"
 
-    def test_stored_headers_mutation_does_not_propagate(self):
+    def test_stored_headers_cannot_be_mutated(self):
         r = HttpRequest(url="https://example.com", headers={"X-Key": "val"}, body="")
-        r.headers["X-Key"] = "mutated"
-        r2 = HttpRequest(url="https://example.com", headers={"X-Key": "val"}, body="")
-        assert r2.headers["X-Key"] == "val"
+        with pytest.raises(TypeError):
+            r.headers["X-Key"] = "mutated"
+
+    def test_stored_headers_cannot_be_cleared(self):
+        r = HttpRequest(url="https://example.com", headers={"X-Key": "val"}, body="")
+        with pytest.raises(AttributeError):
+            r.headers.clear()
+
+    def test_stored_headers_cannot_add_new_key(self):
+        r = HttpRequest(url="https://example.com", headers={"X-Key": "val"}, body="")
+        with pytest.raises(TypeError):
+            r.headers["NEW"] = "x"
+
+
+# ── tipo público (Core Hardening Pack A, Parte D) ──────────────────────────
+
+class TestHeadersType:
+    def test_headers_is_a_mapping(self):
+        from collections.abc import Mapping
+        r = HttpRequest(url="https://example.com", headers={"A": "1"}, body="")
+        assert isinstance(r.headers, Mapping)
+
+    def test_headers_is_mapping_proxy(self):
+        from types import MappingProxyType
+        r = HttpRequest(url="https://example.com", headers={"A": "1"}, body="")
+        assert isinstance(r.headers, MappingProxyType)
+
+    def test_headers_supports_items_iteration(self):
+        r = HttpRequest(url="https://example.com", headers={"A": "1", "B": "2"}, body="")
+        assert dict(r.headers.items()) == {"A": "1", "B": "2"}
+
+    def test_headers_equality_against_plain_dict(self):
+        r = HttpRequest(url="https://example.com", headers={"A": "1"}, body="")
+        assert r.headers == {"A": "1"}
+
+
+# ── repr seguro (Core Hardening Pack A, Parte F) ───────────────────────────
+
+class TestSafeRepr:
+    def test_repr_does_not_expose_api_key_value(self):
+        marker = "ZZAPIKEYMARKER9999"
+        r = HttpRequest(
+            url="https://api-demo.bybit.com/v5/order/create",
+            headers={"X-BAPI-API-KEY": marker},
+            body="{}",
+        )
+        assert marker not in repr(r)
+
+    def test_repr_does_not_expose_signature_value(self):
+        marker = "ZZSIGNATUREMARKER9999"
+        r = HttpRequest(
+            url="https://api-demo.bybit.com/v5/order/create",
+            headers={"X-BAPI-SIGN": marker},
+            body="{}",
+        )
+        assert marker not in repr(r)
+
+    def test_repr_does_not_expose_body(self):
+        marker = "ZZBODYMARKER9999"
+        r = HttpRequest(url="https://example.com", headers={}, body=f'{{"secret": "{marker}"}}')
+        assert marker not in repr(r)
+
+    def test_str_does_not_expose_secrets(self):
+        marker = "ZZSTRMARKER9999"
+        r = HttpRequest(
+            url="https://example.com",
+            headers={"X-BAPI-SIGN": marker},
+            body=marker,
+        )
+        assert marker not in str(r)
+
+    def test_repr_shows_url(self):
+        r = HttpRequest(url="https://api-demo.bybit.com/v5/order/create", headers={}, body="")
+        assert "https://api-demo.bybit.com/v5/order/create" in repr(r)
+
+    def test_repr_shows_header_names_only(self):
+        r = HttpRequest(
+            url="https://example.com",
+            headers={"X-BAPI-API-KEY": "secret-value", "Content-Type": "application/json"},
+            body="",
+        )
+        assert "X-BAPI-API-KEY" in repr(r)
+        assert "Content-Type" in repr(r)
+        assert "secret-value" not in repr(r)
+
+    def test_repr_is_deterministic(self):
+        r = HttpRequest(url="https://example.com", headers={"B": "2", "A": "1"}, body="x")
+        assert repr(r) == repr(r)

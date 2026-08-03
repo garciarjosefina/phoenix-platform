@@ -72,8 +72,8 @@ class TestConstruction:
         )
         assert r.ret_code == 0
         assert r.ret_msg == "OK"
-        assert r.result is result_data
-        assert r.ret_ext_info is ext
+        assert r.result == result_data
+        assert r.ret_ext_info == ext
         assert r.time_ms == 1_700_000_000_000
 
 
@@ -120,30 +120,33 @@ class TestImmutabilityAndSemantics:
         r = _make_response(ret_msg=msg)
         assert r.ret_msg == msg
 
-    def test_result_preserved_by_identity(self):
+    def test_result_preserved_by_value(self):
         data = {"orderId": "xyz", "qty": "0.001"}
         r = _make_response(result=data)
-        assert r.result is data
+        assert r.result == data
 
-    def test_ret_ext_info_preserved_by_identity(self):
+    def test_ret_ext_info_preserved_by_value(self):
         ext = {"meta": "value"}
         r = _make_response(ret_ext_info=ext)
-        assert r.ret_ext_info is ext
+        assert r.ret_ext_info == ext
 
-    def test_no_list_copy(self):
-        lst = [1, 2, 3]
-        r = _make_response(result=lst)
-        assert r.result is lst
-
-    def test_no_dict_copy(self):
+    def test_dict_result_frozen_as_mapping_proxy(self):
         d = {"key": "val"}
         r = _make_response(result=d)
-        assert r.result is d
+        from types import MappingProxyType
+        assert isinstance(r.result, MappingProxyType)
 
-    def test_no_ret_ext_info_list_copy(self):
+    def test_list_result_frozen_as_tuple(self):
+        lst = [1, 2, 3]
+        r = _make_response(result=lst)
+        assert r.result == (1, 2, 3)
+        assert isinstance(r.result, tuple)
+
+    def test_ret_ext_info_list_frozen_as_tuple(self):
         lst = ["a", "b"]
         r = _make_response(ret_ext_info=lst)
-        assert r.ret_ext_info is lst
+        assert r.ret_ext_info == ("a", "b")
+        assert isinstance(r.ret_ext_info, tuple)
 
 
 # ── ret_code validation ────────────────────────────────────────────────────
@@ -196,12 +199,12 @@ class TestResultAcceptance:
     def test_accepts_dict(self):
         d = {"orderId": "abc"}
         r = _make_response(result=d)
-        assert r.result is d
+        assert r.result == d
 
     def test_accepts_list(self):
         lst = [{"orderId": "abc"}]
         r = _make_response(result=lst)
-        assert r.result is lst
+        assert r.result == (({"orderId": "abc"}),)
 
     def test_accepts_str(self):
         r = _make_response(result="raw_string")
@@ -214,7 +217,7 @@ class TestResultAcceptance:
     def test_accepts_nested_structure(self):
         nested = {"orders": [{"id": "1"}, {"id": "2"}]}
         r = _make_response(result=nested)
-        assert r.result is nested
+        assert r.result["orders"] == ({"id": "1"}, {"id": "2"})
 
 
 # ── ret_ext_info acceptance ────────────────────────────────────────────────
@@ -227,12 +230,12 @@ class TestRetExtInfoAcceptance:
     def test_accepts_dict(self):
         ext = {"reqId": "req_001"}
         r = _make_response(ret_ext_info=ext)
-        assert r.ret_ext_info is ext
+        assert r.ret_ext_info == ext
 
     def test_accepts_list(self):
         ext = [1, 2]
         r = _make_response(ret_ext_info=ext)
-        assert r.ret_ext_info is ext
+        assert r.ret_ext_info == (1, 2)
 
     def test_accepts_empty_dict(self):
         r = _make_response(ret_ext_info={})
@@ -273,6 +276,94 @@ class TestTimeMsValidation:
     def test_accepts_large_time_ms(self):
         r = _make_response(time_ms=1_700_000_000_000)
         assert r.time_ms == 1_700_000_000_000
+
+
+# ── inmutabilidad profunda (Core Hardening Pack A, Parte E) ────────────────
+
+class TestDeepImmutability:
+    def test_mutating_original_dict_does_not_affect_stored_result(self):
+        original = {"orderId": "abc"}
+        r = _make_response(result=original)
+        original["orderId"] = "mutated"
+        assert r.result["orderId"] == "abc"
+
+    def test_mutating_original_list_does_not_affect_stored_result(self):
+        original = [1, 2, 3]
+        r = _make_response(result=original)
+        original.append(4)
+        assert r.result == (1, 2, 3)
+
+    def test_stored_dict_result_cannot_be_mutated(self):
+        r = _make_response(result={"a": 1})
+        with pytest.raises(TypeError):
+            r.result["b"] = 2
+
+    def test_stored_nested_dict_cannot_be_mutated(self):
+        r = _make_response(result={"outer": {"inner": 1}})
+        with pytest.raises(TypeError):
+            r.result["outer"]["inner"] = 2
+
+    def test_stored_tuple_result_cannot_be_appended(self):
+        r = _make_response(result=[1, 2])
+        with pytest.raises(AttributeError):
+            r.result.append(3)
+
+    def test_nested_list_inside_dict_frozen_as_tuple(self):
+        r = _make_response(result={"orders": [1, 2, 3]})
+        assert isinstance(r.result["orders"], tuple)
+        with pytest.raises(AttributeError):
+            r.result["orders"].append(4)
+
+    def test_nested_dict_inside_list_frozen_as_mapping_proxy(self):
+        from types import MappingProxyType
+        r = _make_response(result=[{"id": "1"}, {"id": "2"}])
+        assert isinstance(r.result[0], MappingProxyType)
+        with pytest.raises(TypeError):
+            r.result[0]["id"] = "mutated"
+
+    def test_doubly_nested_structure_fully_frozen(self):
+        original = {"orders": [{"id": "1", "tags": ["a", "b"]}]}
+        r = _make_response(result=original)
+        with pytest.raises(TypeError):
+            r.result["orders"][0]["tags"][0] = "z"
+        with pytest.raises(AttributeError):
+            r.result["orders"][0]["tags"].append("c")
+
+    def test_no_information_lost_after_freezing(self):
+        original = {"a": 1, "b": [1, 2, {"c": "d"}], "e": None, "f": "text"}
+        r = _make_response(result=original)
+        assert r.result["a"] == 1
+        assert r.result["b"] == (1, 2, {"c": "d"})
+        assert r.result["b"][2]["c"] == "d"
+        assert r.result["e"] is None
+        assert r.result["f"] == "text"
+
+    def test_equality_preserved_after_freezing(self):
+        r1 = _make_response(result={"a": [1, 2]})
+        r2 = _make_response(result={"a": [1, 2]})
+        assert r1 == r2
+
+    def test_scalars_not_transformed(self):
+        r = _make_response(result="raw_string")
+        assert r.result == "raw_string"
+        assert isinstance(r.result, str)
+        r_int = _make_response(result=42)
+        assert r_int.result == 42
+        assert isinstance(r_int.result, int)
+
+    def test_compatible_with_response_interpreter(self):
+        from execution_gateway.bybit_create_order_response_interpreter import (
+            BybitCreateOrderResponseInterpreter,
+        )
+        from execution_gateway.bybit_create_order_result import BybitCreateOrderResult
+        r = _make_response(result={"orderId": "x", "orderLinkId": "y"}, ret_code=0)
+        result = BybitCreateOrderResponseInterpreter().interpret(response=r)
+        assert result == BybitCreateOrderResult(order_id="x", order_link_id="y")
+
+    def test_set_result_frozen_as_frozenset(self):
+        r = _make_response(result={1, 2, 3})
+        assert isinstance(r.result, frozenset)
+        assert r.result == frozenset({1, 2, 3})
 
 
 # ── no extra behaviour ─────────────────────────────────────────────────────

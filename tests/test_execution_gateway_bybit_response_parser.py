@@ -277,17 +277,17 @@ class TestFieldMapping:
         r = p.parse(response_text='{}')
         assert r.time_ms == 1_700_000_000_000
 
-    def test_result_preserved_by_identity(self):
+    def test_result_preserved_by_value(self):
         result_data = {"orderId": "abc"}
         p, _ = _make_parser(serializer_result=_valid_payload(result=result_data))
         r = p.parse(response_text='{}')
-        assert r.result is result_data
+        assert r.result == result_data
 
-    def test_ret_ext_info_preserved_by_identity(self):
+    def test_ret_ext_info_preserved_by_value(self):
         ext = {"meta": "value"}
         p, _ = _make_parser(serializer_result=_valid_payload(ret_ext_info=ext))
         r = p.parse(response_text='{}')
-        assert r.ret_ext_info is ext
+        assert r.ret_ext_info == ext
 
     def test_accepts_extra_keys(self):
         data = _valid_payload(extra_key="ignored_value")

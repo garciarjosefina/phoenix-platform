@@ -140,3 +140,48 @@
 - Las excepciones (`BybitApiError`, errores de transporte) siguen propagándose sin envolver — el adaptador no introduce manejo de errores nuevo.
 - `gateway.py` y `contracts.py` no importan ningún tipo `Bybit*` (verificado con tests dedicados de pureza de dominio).
 - No se modificó ninguna factory inferior ni el Composition Root: la firma de `BybitExecutionGateway.__init__` no cambió.
+
+---
+
+## ADR-001A — Camino de error del Port desacoplado de Bybit
+
+**Fecha:** 2026-08-01
+**Decisión:** `BybitApiError` nunca cruza `execute()`. Los rechazos de negocio se traducen a `ExecutionResult(status="rejected", error_message=error.ret_msg)`; los errores de infraestructura se traducen a la nueva excepción de dominio `ExecutionInfrastructureError(message=...)`, con el `BybitApiError`/excepción original conservado en `__cause__`.
+**Razón:** Auditoría independiente del ADR-001 encontró que, aunque el camino feliz ya traducía correctamente, `BybitApiError` seguía atravesando el Port sin traducir en el camino de rechazo, rompiendo la sustituibilidad (LSP) entre `DryRunExecutionGateway`, `FakeExecutionGateway` y `BybitExecutionGateway`.
+**Limitación reconocida y corregida en el Core Hardening Pack A (ver abajo):** la primera implementación de este ADR clasificaba *todo* `BybitApiError` como rechazo de negocio (`except BybitApiError: return rejected`) y usaba `except Exception` + `message=str(error)` para el resto. Ambas decisiones fueron corregidas — ver Core Hardening Pack A, Partes A–C.
+
+---
+
+## Core Hardening Pack A — Cierre de la Auditoría Retrospectiva A
+
+**Fecha:** 2026-08-03
+**Contexto:** La Auditoría Retrospectiva A (auditoría independiente del núcleo `execution_gateway`, posterior al ADR-001/ADR-001A) clasificó el núcleo como no apto para congelarse, con hallazgos bloqueantes e importantes. Este paquete los resuelve en una única pasada coordinada.
+
+**A — Clasificación explícita de errores Bybit.** `BybitExecutionGateway` mantiene un clasificador privado, `_ORDER_REJECTION_RET_CODES = frozenset({10001, 110003, 110004, 110007})`: sólo estos códigos, verificados y respaldados por caso de uso, se traducen a `ExecutionResult(status="rejected")`. Cualquier otro `ret_code` — incluidos autenticación (10003), firma (10004), rate limit (10006/429), timestamp (10002), servidor (10016) y **cualquier código desconocido** — se trata de forma conservadora (fail-closed) como `ExecutionInfrastructureError`. Nunca como rechazo normal.
+
+**B — Ausencia de catch-all.** `except Exception` fue eliminado. El adaptador sólo captura `(OSError, json.JSONDecodeError)` — los únicos tipos concretos que la cadena real de transporte (`urllib.error.URLError`/`HTTPError`, timeouts de socket, y `json.loads` sobre un body no-JSON) puede producir. `TypeError`, `ValueError` genérico, `AttributeError`, `KeyError`, `AssertionError` y `RuntimeError` propagan sin envolver: representan defectos de programación, no fallos operacionales.
+
+**C — Mensajes seguros.** `ExecutionInfrastructureError` nunca recibe `message=str(error)`. Usa una constante fija (`"Bybit execution infrastructure failure"`); el detalle técnico original queda exclusivamente en `__cause__`, nunca en el mensaje que cruza al dominio. No se copia `ret_msg` ni se expone `ret_code`.
+
+**D — Inmutabilidad profunda de `HttpRequest`.** `headers` se envuelve en `MappingProxyType` tras una copia defensiva en `__post_init__`; la anotación pública pasa a `Mapping[str, str]`. Cambio imprescindible relacionado: `UrllibHttpTransport.post` valida `isinstance(headers, Mapping)` en lugar de `isinstance(headers, dict)` (un `MappingProxyType` no es `dict`).
+
+**E — `BybitResponse` inmutable recursivamente.** `result`/`ret_ext_info` se congelan con `_deep_freeze`: `dict`→`MappingProxyType`, `list`→`tuple`, `set`→`frozenset`, recursivamente. Compatible con `BybitCreateOrderResponseInterpreter` sin cambios (`MappingProxyType` es `Mapping`).
+
+**F — `repr` seguro.** `BybitAuthentication.signature` usa `field(repr=False)` (mismo patrón que `BybitDemoCredentials.api_secret`); `api_key` permanece visible por coherencia. `HttpRequest` reemplaza el `__repr__` autogenerado por uno que muestra la URL y **sólo los nombres** de los headers, nunca sus valores, y oculta el body por completo.
+
+**G — `GatewayConfig` estricto.** `environment` exige `str` no vacío/whitespace (sin `strip`); `dry_run` exige `bool` exacto (rechaza `"true"`, `1`, etc.); `timeout_seconds` exige `int` con `bool` explícitamente rechazado — mismo patrón que el resto del núcleo.
+
+**H — Factory genérica desacoplada de Bybit.** `create_execution_gateway(config: GatewayConfig) -> ExecutionGateway` — se eliminó el parámetro `client: BybitDemoClient | None`. Con `dry_run=False` lanza `ValueError("Live execution requires a dedicated composition root for the selected adapter.")`, sin nombrar ningún exchange. `create_configured_bybit_demo_execution_gateway` (Hito 3.64) sigue siendo el único composition root para ejecución real con Bybit.
+
+**I — Cantidades y precios finitos, sin notación científica.** Nueva función privada `_to_plain_decimal` en el adaptador: rechaza `NaN`/`+inf`/`-inf` con `ExecutionRequestNotSupportedError` antes de construir el `Decimal`. Cambio imprescindible relacionado, verificado matemáticamente (no existe forma de que `Decimal.__str__` evite notación científica para magnitudes extremas sin intervenir en el punto de serialización): `BybitCreateOrderPayloadBuilder` usa `format(valor, "f")` en lugar de `str(valor)` para `qty`/`price`, garantizando representación decimal plana.
+
+**J — Verificación de correlación `order_link_id`.** El adaptador compara `BybitCreateOrderResult.order_link_id` contra `ExecutionRequest.order_id` antes de devolver `status="accepted"`. Ante una discordancia, lanza `ExecutionInfrastructureError` (mensaje seguro, sin vocabulario Bybit) en lugar de confirmar una orden cuya identidad no puede verificarse.
+
+**K — Incompatibilidad de longitud sin vocabulario Bybit.** El adaptador valida `len(request.order_id) <= 36` **antes** de construir `BybitCreateOrderRequest`, evitando que el mensaje `"order_link_id must be at most 36 characters"` escape al dominio. Ante incompatibilidad, lanza la nueva excepción `ExecutionRequestNotSupportedError(message="Execution request cannot be represented by the selected adapter")` — misma excepción reutilizada por la Parte I para valores no finitos: ambas son, conceptualmente, "el adaptador elegido no puede representar esta solicitud de dominio válida".
+
+**L — Pureza de dominio simétrica.** `tests/test_execution_gateway_domain_purity.py` aplica la misma regla (sin imports, sin nombres, sin mensajes que nombren un exchange) a `gateway.py`, `contracts.py`, `execution_infrastructure_error.py`, `execution_request_not_supported_error.py` y `factory.py` por igual — la asimetría original (que dejaba pasar `BybitDemoClient` en `factory.py`) queda cerrada.
+
+**Archivos de producción modificados:** `bybit_gateway.py`, `execution_infrastructure_error.py` (sin cambios de código, ya correcto), `http_request.py`, `bybit_response.py`, `bybit_authenticator.py`, `config.py`, `factory.py`, `__init__.py`; y, por necesidad estrictamente demostrada, `urllib_http_transport.py` (Parte D) y `bybit_create_order_payload_builder.py` (Parte I).
+**Archivo nuevo:** `execution_request_not_supported_error.py`.
+**No modificado:** `phoenix_core`, `BybitDemoClient`, authenticator, request builder, sender, serializer, factories inferiores, Composition Root. Sin dependencias nuevas.
+**Deuda que permanece fuera de alcance (documentada, no bloqueante):** duplicación de la constante de longitud 36 entre `BybitCreateOrderRequest`/`BybitCreateOrderResult`/el adaptador; `time_in_force`/`reduce_only` fijados rígidamente por el adaptador (el dominio no modela vigencia ni reduce-only); doble validación preexistente de `recv_window_ms`/`timeout_seconds` entre composition roots y sus consumidores (hitos 3.51/3.52/3.59/3.60). No existe conexión real con Bybit Demo.

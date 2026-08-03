@@ -1,10 +1,12 @@
+from collections.abc import Mapping
 from dataclasses import dataclass
+from types import MappingProxyType
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, repr=False)
 class HttpRequest:
     url: str
-    headers: dict[str, str]
+    headers: Mapping[str, str]
     body: str
 
     def __post_init__(self) -> None:
@@ -24,4 +26,8 @@ class HttpRequest:
         if not isinstance(self.body, str):
             raise TypeError(f"body must be str, got: {type(self.body).__name__}")
 
-        object.__setattr__(self, "headers", dict(self.headers))
+        object.__setattr__(self, "headers", MappingProxyType(dict(self.headers)))
+
+    def __repr__(self) -> str:
+        header_names = sorted(self.headers.keys())
+        return f"HttpRequest(url={self.url!r}, headers={header_names!r}, body=<redacted>)"

@@ -3,9 +3,9 @@
 ## Estado actual
 
 **Versión:** `v0.1.0` (tag en `main`)
-**Tests:** 3463 passing
+**Tests:** 3587 passing
 **Rama activa:** `main`
-**Última actualización:** 2026-08-01
+**Última actualización:** 2026-08-03
 
 ---
 
@@ -117,6 +117,7 @@
 | 3.64 | Composition root integral adaptado para recibir `BybitDemoExecutionConfig` (firma anterior eliminada) — 107 tests de la factory + 4 tests de orden de validación en el config | `857ebe4` |
 | ADR-001 | `ExecutionGateway` como Port del dominio; `BybitExecutionGateway` como Adapter (traducción `ExecutionRequest`↔`BybitCreateOrderRequest`/`ExecutionResult`↔`BybitCreateOrderResult`, sin exponer tipos Bybit fuera del adaptador) — 39 tests nuevos, 4 archivos de test migrados | `2ac7678` |
 | ADR-001A | Camino de error del Port desacoplado de Bybit: `BybitApiError` (rechazo de negocio) se traduce a `ExecutionResult(status="rejected")`; excepciones de infraestructura se traducen a `ExecutionInfrastructureError` (nuevo tipo de dominio, `message: str`, encadenada vía `__cause__`) — ningún tipo `Bybit*` cruza `execute()` en ningún camino | `f23374d` |
+| Core Hardening Pack A | Cierre de la Auditoría Retrospectiva A: clasificación fail-closed de errores Bybit (allowlist de rechazo explícita), eliminación del catch-all genérico, mensajes de infraestructura saneados, `HttpRequest`/`BybitResponse` inmutables en profundidad, `repr` seguro (`BybitAuthentication.signature`, headers), `GatewayConfig` con validación estricta, `create_execution_gateway` desacoplado de Bybit, cantidades/precios sin notación científica, verificación de correlación `order_link_id`, incompatibilidad de longitud sin vocabulario Bybit, pureza de dominio simétrica — suite 3463→3587 (+124 tests netos) | pendiente |
 
 ### Próximo hito
 

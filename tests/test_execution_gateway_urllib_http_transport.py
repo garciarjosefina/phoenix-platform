@@ -110,6 +110,24 @@ class TestHeadersValidation:
         result = t.post(url="https://example.com", headers={}, body="", timeout_seconds=1.0)
         assert result == "ok"
 
+    def test_accepts_mapping_proxy_headers(self, monkeypatch):
+        from types import MappingProxyType
+        resp = _FakeResponse(b"ok")
+        monkeypatch.setattr(urllib.request, "urlopen", _make_urlopen(resp))
+        t = UrllibHttpTransport()
+        result = t.post(
+            url="https://example.com",
+            headers=MappingProxyType({"A": "1"}),
+            body="",
+            timeout_seconds=1.0,
+        )
+        assert result == "ok"
+
+    def test_rejects_list_headers_still(self):
+        t = UrllibHttpTransport()
+        with pytest.raises(TypeError):
+            t.post(url="https://example.com", headers=["not", "a", "mapping"], body="", timeout_seconds=1.0)
+
 
 # ── body validation ────────────────────────────────────────────────────────
 

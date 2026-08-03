@@ -15,11 +15,11 @@ class BybitCreateOrderPayloadBuilder:
             "symbol": request.symbol,
             "side": request.side,
             "orderType": request.order_type,
-            "qty": str(request.quantity),
+            "qty": format(request.quantity, "f"),
         }
 
         if request.order_type == "Limit":
-            payload["price"] = str(request.price)
+            payload["price"] = format(request.price, "f")
 
         payload["timeInForce"] = request.time_in_force
         payload["reduceOnly"] = request.reduce_only

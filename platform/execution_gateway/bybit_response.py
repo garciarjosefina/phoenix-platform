@@ -1,5 +1,18 @@
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Any
+
+
+def _deep_freeze(value: Any) -> Any:
+    if isinstance(value, dict):
+        return MappingProxyType({k: _deep_freeze(v) for k, v in value.items()})
+    if isinstance(value, list):
+        return tuple(_deep_freeze(v) for v in value)
+    if isinstance(value, set):
+        return frozenset(_deep_freeze(v) for v in value)
+    if isinstance(value, tuple):
+        return tuple(_deep_freeze(v) for v in value)
+    return value
 
 
 @dataclass(frozen=True)
@@ -21,3 +34,6 @@ class BybitResponse:
             raise TypeError(f"time_ms must be int, got: {type(self.time_ms).__name__}")
         if self.time_ms < 0:
             raise ValueError(f"time_ms must be >= 0, got: {self.time_ms}")
+
+        object.__setattr__(self, "result", _deep_freeze(self.result))
+        object.__setattr__(self, "ret_ext_info", _deep_freeze(self.ret_ext_info))

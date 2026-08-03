@@ -1,4 +1,5 @@
 import urllib.request
+from collections.abc import Mapping
 
 
 class UrllibHttpTransport:
@@ -6,7 +7,7 @@ class UrllibHttpTransport:
         self,
         *,
         url: str,
-        headers: dict[str, str],
+        headers: Mapping[str, str],
         body: str,
         timeout_seconds: float,
     ) -> str:
@@ -15,8 +16,8 @@ class UrllibHttpTransport:
         if not url or url.isspace():
             raise ValueError("url must not be empty or whitespace-only")
 
-        if not isinstance(headers, dict):
-            raise TypeError(f"headers must be dict, got: {type(headers).__name__}")
+        if not isinstance(headers, Mapping):
+            raise TypeError(f"headers must be a Mapping, got: {type(headers).__name__}")
         for k, v in headers.items():
             if not isinstance(k, str):
                 raise TypeError(f"header key must be str, got: {type(k).__name__}")
