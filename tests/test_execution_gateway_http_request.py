@@ -175,6 +175,76 @@ class TestHeadersType:
         assert r.headers == {"A": "1"}
 
 
+# ── aceptación de cualquier Mapping válido (Auditoría A final, H2) ─────────
+
+class TestHeadersAcceptsAnyMapping:
+    def test_accepts_plain_dict(self):
+        r = HttpRequest(url="https://example.com", headers={"A": "1"}, body="")
+        assert r.headers == {"A": "1"}
+
+    def test_accepts_mapping_proxy_directly(self):
+        from types import MappingProxyType
+        proxy = MappingProxyType({"A": "1"})
+        r = HttpRequest(url="https://example.com", headers=proxy, body="")
+        assert r.headers == {"A": "1"}
+
+    def test_accepts_custom_mapping(self):
+        from collections.abc import Mapping
+
+        class _CustomMapping(Mapping):
+            def __init__(self, data):
+                self._data = data
+            def __getitem__(self, key):
+                return self._data[key]
+            def __iter__(self):
+                return iter(self._data)
+            def __len__(self):
+                return len(self._data)
+
+        r = HttpRequest(url="https://example.com", headers=_CustomMapping({"A": "1"}), body="")
+        assert r.headers == {"A": "1"}
+
+    def test_round_trip_accepts_own_exposed_headers(self):
+        original = HttpRequest(url="https://example.com", headers={"A": "1", "B": "2"}, body="")
+        round_tripped = HttpRequest(url="https://example.com", headers=original.headers, body="")
+        assert round_tripped.headers == {"A": "1", "B": "2"}
+
+    def test_round_tripped_headers_are_also_immutable(self):
+        original = HttpRequest(url="https://example.com", headers={"A": "1"}, body="")
+        round_tripped = HttpRequest(url="https://example.com", headers=original.headers, body="")
+        with pytest.raises(TypeError):
+            round_tripped.headers["A"] = "mutated"
+
+    def test_round_trip_copies_defensively_not_by_reference(self):
+        original = HttpRequest(url="https://example.com", headers={"A": "1"}, body="")
+        round_tripped = HttpRequest(url="https://example.com", headers=original.headers, body="")
+        assert round_tripped.headers is not original.headers
+
+    def test_still_rejects_non_mapping_sequence(self):
+        with pytest.raises(TypeError):
+            HttpRequest(url="https://example.com", headers=[("k", "v")], body="")
+
+    def test_still_rejects_none(self):
+        with pytest.raises(TypeError):
+            HttpRequest(url="https://example.com", headers=None, body="")
+
+    def test_still_validates_keys_and_values_of_custom_mapping(self):
+        from collections.abc import Mapping
+
+        class _BadMapping(Mapping):
+            def __init__(self, data):
+                self._data = data
+            def __getitem__(self, key):
+                return self._data[key]
+            def __iter__(self):
+                return iter(self._data)
+            def __len__(self):
+                return len(self._data)
+
+        with pytest.raises(TypeError):
+            HttpRequest(url="https://example.com", headers=_BadMapping({1: "v"}), body="")
+
+
 # ── repr seguro (Core Hardening Pack A, Parte F) ───────────────────────────
 
 class TestSafeRepr:

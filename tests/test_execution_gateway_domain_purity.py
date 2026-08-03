@@ -174,6 +174,35 @@ class TestErrorPathIsAlsoDomainOnly:
         except TypeError:
             pass
 
+    def test_bybit_response_processing_error_never_crosses_execute(self):
+        """Corrección final de Auditoría A: una respuesta remota recibida
+        pero no interpretable (BybitResponseProcessingError) tampoco debe
+        cruzar el Port sin traducir."""
+        from execution_gateway.bybit_response_processing_error import BybitResponseProcessingError
+
+        class _RaisingClient:
+            def place_order(self, request):
+                raise BybitResponseProcessingError(message="Bybit response could not be processed")
+
+        gw = BybitExecutionGateway(client=_RaisingClient())
+        try:
+            gw.execute(
+                ExecutionRequest(order_id="d1", symbol="BTCUSDT", side="buy", order_type="market", quantity=1.0)
+            )
+            assert False, "expected ExecutionInfrastructureError"
+        except ExecutionInfrastructureError:
+            pass
+        except BybitResponseProcessingError:
+            raise AssertionError("BybitResponseProcessingError must not cross the Port unwrapped")
+
+    def test_gateway_module_does_not_reference_bybit_response_processing_error(self):
+        src = inspect.getsource(gateway_module)
+        assert "BybitResponseProcessingError" not in src
+
+    def test_contracts_module_does_not_reference_bybit_response_processing_error(self):
+        src = inspect.getsource(contracts_module)
+        assert "BybitResponseProcessingError" not in src
+
 
 # ---------------------------------------------------------------------------
 # Core Hardening Pack A, Parte L — pureza aplicada simétricamente a TODOS

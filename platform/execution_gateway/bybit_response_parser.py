@@ -1,5 +1,10 @@
+from json import JSONDecodeError
+
 from execution_gateway.bybit_response import BybitResponse
+from execution_gateway.bybit_response_processing_error import BybitResponseProcessingError
 from execution_gateway.json_serializer import JsonSerializer
+
+_PROCESSING_ERROR_MESSAGE = "Bybit response could not be processed"
 
 
 class BybitResponseParser:
@@ -15,15 +20,22 @@ class BybitResponseParser:
             raise TypeError(
                 f"response_text must be str, got: {type(response_text).__name__}"
             )
-        data = self._serializer.loads(response_text)
+
+        try:
+            data = self._serializer.loads(response_text)
+        except JSONDecodeError as error:
+            raise BybitResponseProcessingError(message=_PROCESSING_ERROR_MESSAGE) from error
+
         if not isinstance(data, dict):
-            raise TypeError(
-                f"response root must be dict, got: {type(data).__name__}"
+            raise BybitResponseProcessingError(message=_PROCESSING_ERROR_MESSAGE)
+
+        try:
+            return BybitResponse(
+                ret_code=data["retCode"],
+                ret_msg=data["retMsg"],
+                result=data["result"],
+                ret_ext_info=data["retExtInfo"],
+                time_ms=data["time"],
             )
-        return BybitResponse(
-            ret_code=data["retCode"],
-            ret_msg=data["retMsg"],
-            result=data["result"],
-            ret_ext_info=data["retExtInfo"],
-            time_ms=data["time"],
-        )
+        except (KeyError, TypeError, ValueError) as error:
+            raise BybitResponseProcessingError(message=_PROCESSING_ERROR_MESSAGE) from error

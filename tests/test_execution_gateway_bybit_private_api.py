@@ -5,6 +5,7 @@ from execution_gateway.bybit_private_api import BybitPrivateApi
 from execution_gateway.bybit_private_request_sender import BybitPrivateRequestSender
 from execution_gateway.bybit_response_parser import BybitResponseParser
 from execution_gateway.bybit_response import BybitResponse
+from execution_gateway.bybit_response_processing_error import BybitResponseProcessingError
 
 
 # ── helpers ────────────────────────────────────────────────────────────────
@@ -434,3 +435,70 @@ class TestNoExtraResponsibilities:
         assert GatewayConfig().environment == "demo"
         r = BybitResponse(ret_code=0, ret_msg="OK", result={}, ret_ext_info={}, time_ms=1000)
         assert r.ret_code == 0
+
+
+# ---------------------------------------------------------------------------
+# Traducción de fallos de decodificación remota (corrección final Auditoría A)
+#
+# BybitPrivateApi es la frontera entre el transporte HTTP genérico (que
+# puede lanzar UnicodeDecodeError al decodificar un body no-UTF8) y el
+# procesamiento específico de Bybit. Es el único componente que sabe que un
+# UnicodeDecodeError en este punto proviene de una respuesta remota.
+# ---------------------------------------------------------------------------
+
+class _UnicodeFailingSender(BybitPrivateRequestSender):
+    def __init__(self, error: UnicodeDecodeError) -> None:
+        self._error = error
+        self.call_count = 0
+
+    def send(self, *, url: str, payload: object) -> str:
+        self.call_count += 1
+        raise self._error
+
+
+def _make_unicode_decode_error() -> UnicodeDecodeError:
+    return UnicodeDecodeError("utf-8", b"\xff\xfe", 0, 1, "invalid start byte")
+
+
+class TestUnicodeDecodeErrorTranslation:
+    def test_translated_to_bybit_response_processing_error(self):
+        sender = _UnicodeFailingSender(_make_unicode_decode_error())
+        api = BybitPrivateApi(sender=sender, response_parser=_SpyParser())
+        with pytest.raises(BybitResponseProcessingError):
+            api.request(url="https://example.com", payload={})
+
+    def test_original_exception_conserved_as_cause(self):
+        original = _make_unicode_decode_error()
+        sender = _UnicodeFailingSender(original)
+        api = BybitPrivateApi(sender=sender, response_parser=_SpyParser())
+        with pytest.raises(BybitResponseProcessingError) as exc_info:
+            api.request(url="https://example.com", payload={})
+        assert exc_info.value.__cause__ is original
+
+    def test_message_is_safe_constant_not_str_of_original_error(self):
+        # El detalle técnico del UnicodeDecodeError (incluidos los bytes
+        # crudos del body remoto) nunca debe copiarse al mensaje público.
+        original = _make_unicode_decode_error()
+        sender = _UnicodeFailingSender(original)
+        api = BybitPrivateApi(sender=sender, response_parser=_SpyParser())
+        with pytest.raises(BybitResponseProcessingError) as exc_info:
+            api.request(url="https://example.com", payload={})
+        assert str(exc_info.value) == "Bybit response could not be processed"
+        assert str(exc_info.value) != str(original)
+        assert "invalid start byte" not in str(exc_info.value)
+        assert "\\xff" not in str(exc_info.value)
+
+    def test_parser_not_called_when_sender_fails(self):
+        sender = _UnicodeFailingSender(_make_unicode_decode_error())
+        parser = _SpyParser()
+        api = BybitPrivateApi(sender=sender, response_parser=parser)
+        with pytest.raises(BybitResponseProcessingError):
+            api.request(url="https://example.com", payload={})
+        assert parser.calls == []
+
+    def test_sender_called_exactly_once(self):
+        sender = _UnicodeFailingSender(_make_unicode_decode_error())
+        api = BybitPrivateApi(sender=sender, response_parser=_SpyParser())
+        with pytest.raises(BybitResponseProcessingError):
+            api.request(url="https://example.com", payload={})
+        assert sender.call_count == 1

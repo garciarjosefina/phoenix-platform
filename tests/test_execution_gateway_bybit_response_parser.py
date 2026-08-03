@@ -3,6 +3,7 @@ import pytest
 import execution_gateway
 from execution_gateway.bybit_response_parser import BybitResponseParser
 from execution_gateway.bybit_response import BybitResponse
+from execution_gateway.bybit_response_processing_error import BybitResponseProcessingError
 from execution_gateway.json_serializer import JsonSerializer
 
 
@@ -205,22 +206,22 @@ class TestRootStructure:
 
     def test_rejects_list_root(self):
         p, _ = _make_parser(serializer_result=[1, 2])
-        with pytest.raises(TypeError):
+        with pytest.raises(BybitResponseProcessingError):
             p.parse(response_text='[]')
 
     def test_rejects_tuple_root(self):
         p, _ = _make_parser(serializer_result=(1, 2))
-        with pytest.raises(TypeError):
+        with pytest.raises(BybitResponseProcessingError):
             p.parse(response_text='null')
 
     def test_rejects_str_root(self):
         p, _ = _make_parser(serializer_result="string")
-        with pytest.raises(TypeError):
+        with pytest.raises(BybitResponseProcessingError):
             p.parse(response_text='"string"')
 
     def test_rejects_number_root(self):
         p, _ = _make_parser(serializer_result=42)
-        with pytest.raises(TypeError):
+        with pytest.raises(BybitResponseProcessingError):
             p.parse(response_text='42')
 
     def test_rejects_none_root(self):
@@ -229,7 +230,7 @@ class TestRootStructure:
             def loads(self, v): return None
 
         p = BybitResponseParser(serializer=_NoneSerializer())
-        with pytest.raises(TypeError):
+        with pytest.raises(BybitResponseProcessingError):
             p.parse(response_text='null')
 
     def test_no_dict_copy(self):
@@ -301,39 +302,40 @@ class TestFieldMapping:
         r = p.parse(response_text='{}')
         assert r.ret_code == 0
 
-    def test_missing_ret_code_raises_key_error(self):
+    def test_missing_ret_code_raises_processing_error(self):
         data = _valid_payload()
         del data["retCode"]
         p, _ = _make_parser(serializer_result=data)
-        with pytest.raises(KeyError):
+        with pytest.raises(BybitResponseProcessingError) as exc_info:
             p.parse(response_text='{}')
+        assert isinstance(exc_info.value.__cause__, KeyError)
 
-    def test_missing_ret_msg_raises_key_error(self):
+    def test_missing_ret_msg_raises_processing_error(self):
         data = _valid_payload()
         del data["retMsg"]
         p, _ = _make_parser(serializer_result=data)
-        with pytest.raises(KeyError):
+        with pytest.raises(BybitResponseProcessingError):
             p.parse(response_text='{}')
 
-    def test_missing_result_raises_key_error(self):
+    def test_missing_result_raises_processing_error(self):
         data = _valid_payload()
         del data["result"]
         p, _ = _make_parser(serializer_result=data)
-        with pytest.raises(KeyError):
+        with pytest.raises(BybitResponseProcessingError):
             p.parse(response_text='{}')
 
-    def test_missing_ret_ext_info_raises_key_error(self):
+    def test_missing_ret_ext_info_raises_processing_error(self):
         data = _valid_payload()
         del data["retExtInfo"]
         p, _ = _make_parser(serializer_result=data)
-        with pytest.raises(KeyError):
+        with pytest.raises(BybitResponseProcessingError):
             p.parse(response_text='{}')
 
-    def test_missing_time_raises_key_error(self):
+    def test_missing_time_raises_processing_error(self):
         data = _valid_payload()
         del data["time"]
         p, _ = _make_parser(serializer_result=data)
-        with pytest.raises(KeyError):
+        with pytest.raises(BybitResponseProcessingError):
             p.parse(response_text='{}')
 
 
@@ -389,6 +391,33 @@ class TestResult:
 # ── error propagation ──────────────────────────────────────────────────────
 
 class TestErrorPropagation:
+    def test_json_decode_error_translated_to_processing_error(self):
+        import json
+
+        class _MalformedJson:
+            def dumps(self, v): return ""
+            def loads(self, v):
+                json.loads("not valid json")
+
+        p = BybitResponseParser(serializer=_MalformedJson())
+        with pytest.raises(BybitResponseProcessingError) as exc_info:
+            p.parse(response_text="not valid json")
+        assert isinstance(exc_info.value.__cause__, json.JSONDecodeError)
+
+    def test_json_decode_error_message_is_safe(self):
+        import json
+
+        class _MalformedJson:
+            def dumps(self, v): return ""
+            def loads(self, v):
+                json.loads("<html>502 Bad Gateway</html>")
+
+        p = BybitResponseParser(serializer=_MalformedJson())
+        with pytest.raises(BybitResponseProcessingError) as exc_info:
+            p.parse(response_text="ignored")
+        assert "502" not in str(exc_info.value)
+        assert "html" not in str(exc_info.value)
+
     def test_propagates_serializer_exception(self):
         class _Broken:
             def dumps(self, v): return ""
@@ -398,19 +427,29 @@ class TestErrorPropagation:
         with pytest.raises(RuntimeError, match="boom"):
             p.parse(response_text='{}')
 
-    def test_propagates_bybit_response_type_error(self):
+    def test_invalid_ret_code_type_raises_processing_error(self):
         data = _valid_payload()
         data["retCode"] = "not_an_int"
         p, _ = _make_parser(serializer_result=data)
-        with pytest.raises(TypeError):
+        with pytest.raises(BybitResponseProcessingError) as exc_info:
             p.parse(response_text='{}')
+        assert isinstance(exc_info.value.__cause__, TypeError)
 
-    def test_propagates_bybit_response_value_error(self):
+    def test_invalid_time_value_raises_processing_error(self):
         data = _valid_payload()
         data["time"] = -1
         p, _ = _make_parser(serializer_result=data)
-        with pytest.raises(ValueError):
+        with pytest.raises(BybitResponseProcessingError) as exc_info:
             p.parse(response_text='{}')
+        assert isinstance(exc_info.value.__cause__, ValueError)
+
+    def test_processing_error_message_is_safe_constant(self):
+        data = _valid_payload()
+        data["retCode"] = "not_an_int"
+        p, _ = _make_parser(serializer_result=data)
+        with pytest.raises(BybitResponseProcessingError) as exc_info:
+            p.parse(response_text='{}')
+        assert str(exc_info.value) == "Bybit response could not be processed"
 
     def test_no_retry(self):
         call_count = []

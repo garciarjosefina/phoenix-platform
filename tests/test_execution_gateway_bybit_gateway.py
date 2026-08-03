@@ -1,5 +1,4 @@
 import inspect
-import json
 import os
 from decimal import Decimal
 
@@ -12,6 +11,7 @@ from execution_gateway.bybit_api_error import BybitApiError
 from execution_gateway.bybit_client import BybitDemoClient
 from execution_gateway.bybit_create_order_request import BybitCreateOrderRequest
 from execution_gateway.bybit_create_order_result import BybitCreateOrderResult
+from execution_gateway.bybit_response_processing_error import BybitResponseProcessingError
 from execution_gateway.execution_infrastructure_error import ExecutionInfrastructureError
 from execution_gateway.execution_request_not_supported_error import ExecutionRequestNotSupportedError
 from execution_gateway.gateway import ExecutionGateway
@@ -467,11 +467,23 @@ class TestTransportFailureTranslation:
         with pytest.raises(ExecutionInfrastructureError):
             gw.execute(_make_request())
 
-    def test_json_decode_error_translated(self):
-        malformed = json.JSONDecodeError("Expecting value", "not json", 0)
+    def test_bybit_response_processing_error_translated(self):
+        # En el stack real, json.JSONDecodeError y demás fallos de parseo se
+        # normalizan a BybitResponseProcessingError en la frontera inferior
+        # (bybit_response_parser.py / bybit_create_order_response_interpreter.py
+        # / bybit_private_api.py) antes de llegar aquí. El gateway sólo debe
+        # conocer el tipo ya normalizado.
+        malformed = BybitResponseProcessingError(message="Bybit response could not be processed")
         gw = BybitExecutionGateway(client=_RaisingClient(malformed))
         with pytest.raises(ExecutionInfrastructureError):
             gw.execute(_make_request())
+
+    def test_bybit_response_processing_error_cause_preserved(self):
+        original = BybitResponseProcessingError(message="Bybit response could not be processed")
+        gw = BybitExecutionGateway(client=_RaisingClient(original))
+        with pytest.raises(ExecutionInfrastructureError) as exc_info:
+            gw.execute(_make_request())
+        assert exc_info.value.__cause__ is original
 
     def test_os_error_cause_preserved(self):
         original = OSError("connection refused")

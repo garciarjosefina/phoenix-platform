@@ -40,9 +40,14 @@ from execution_gateway.bybit_endpoints import BYBIT_CREATE_ORDER_ENDPOINT
 from execution_gateway.bybit_gateway import BybitExecutionGateway
 from execution_gateway.bybit_private_api import BybitPrivateApi
 from execution_gateway.bybit_response import BybitResponse
+from execution_gateway.bybit_response_processing_error import BybitResponseProcessingError
 from execution_gateway.bybit_url_builder import BybitUrlBuilder
 from execution_gateway.contracts import ExecutionRequest, ExecutionResult
 from execution_gateway.execution_infrastructure_error import ExecutionInfrastructureError
+from execution_gateway.bybit_demo_execution_config import BybitDemoExecutionConfig
+from execution_gateway.configured_bybit_demo_execution_gateway_factory import (
+    create_configured_bybit_demo_execution_gateway,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -914,9 +919,12 @@ class TestGatewayInfrastructureError:
             gw.execute(_make_execution_request())
         assert "raw error with secret detail" not in str(exc_info.value)
 
-    def test_json_decode_error_translated(self):
-        import json
-        malformed = json.JSONDecodeError("Expecting value", "not json", 0)
+    def test_bybit_response_processing_error_translated(self):
+        # En el stack real, json.JSONDecodeError y demás fallos de parseo se
+        # normalizan a BybitResponseProcessingError dentro de BybitPrivateApi/
+        # BybitResponseParser antes de llegar al gateway (ver
+        # TestMalformedRemoteResponses más abajo para la cadena real completa).
+        malformed = BybitResponseProcessingError(message="Bybit response could not be processed")
         gw = _build_gateway(ErrorPrivateApi(malformed))
         with pytest.raises(ExecutionInfrastructureError):
             gw.execute(_make_execution_request())
@@ -1068,3 +1076,169 @@ class TestGatewayMultipleCalls:
         r2 = gw.execute(_make_execution_request(order_id="l2"))
         assert r1.exchange_order_id == "X"
         assert r2.exchange_order_id == "Y"
+
+
+# ===========================================================================
+# B.6. Respuestas remotas no interpretables — integración productiva completa
+#
+# Se construye el gateway con el composition root real
+# (create_configured_bybit_demo_execution_gateway) y se sustituye
+# ÚNICAMENTE urllib.request.urlopen, tal como llegaría una respuesta real de
+# Bybit. Ejercita la cadena completa: UrllibHttpTransport -> HttpRequestExecutor
+# -> BybitPrivateRequestSender -> BybitPrivateApi -> BybitResponseParser ->
+# BybitCreateOrderResponseInterpreter -> BybitDemoClient -> BybitExecutionGateway.
+# ===========================================================================
+
+class _FakeUrlopenResponse:
+    def __init__(self, body: bytes):
+        self._body = body
+
+    def read(self) -> bytes:
+        return self._body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+
+def _build_real_gateway() -> BybitExecutionGateway:
+    config = BybitDemoExecutionConfig(
+        api_key="demo-key", api_secret="demo-secret",
+        recv_window_ms=5_000, timeout_seconds=5.0,
+    )
+    return create_configured_bybit_demo_execution_gateway(config=config)
+
+
+def _execute_with_fake_response(body: bytes) -> ExecutionResult:
+    import urllib.request
+
+    gw = _build_real_gateway()
+    request = _make_execution_request()
+    original_urlopen = urllib.request.urlopen
+    urllib.request.urlopen = lambda *a, **k: _FakeUrlopenResponse(body)
+    try:
+        return gw.execute(request)
+    finally:
+        urllib.request.urlopen = original_urlopen
+
+
+_MALFORMED_RESPONSE_CASES = {
+    "bytes_not_utf8": b"\xff\xfe\x00bad",
+    "body_not_json": b"<html><body>502 Bad Gateway</body></html>",
+    "json_root_is_list": b"[1, 2, 3]",
+    "missing_ret_code": b'{"retMsg":"OK","result":{"orderId":"x","orderLinkId":"phoenix-test-order-001"},"retExtInfo":{},"time":1}',
+    "ret_code_wrong_type": b'{"retCode":"0","retMsg":"OK","result":{"orderId":"x","orderLinkId":"phoenix-test-order-001"},"retExtInfo":{},"time":1}',
+    "missing_ret_msg": b'{"retCode":0,"result":{"orderId":"x","orderLinkId":"phoenix-test-order-001"},"retExtInfo":{},"time":1}',
+    "missing_result": b'{"retCode":0,"retMsg":"OK","retExtInfo":{},"time":1}',
+    "result_not_mapping": b'{"retCode":0,"retMsg":"OK","result":[1,2],"retExtInfo":{},"time":1}',
+    "missing_order_id": b'{"retCode":0,"retMsg":"OK","result":{"orderLinkId":"phoenix-test-order-001"},"retExtInfo":{},"time":1}',
+    "missing_order_link_id": b'{"retCode":0,"retMsg":"OK","result":{"orderId":"x"},"retExtInfo":{},"time":1}',
+    "order_id_wrong_type": b'{"retCode":0,"retMsg":"OK","result":{"orderId":1,"orderLinkId":"phoenix-test-order-001"},"retExtInfo":{},"time":1}',
+}
+
+
+class TestMalformedRemoteResponses:
+    @pytest.mark.parametrize("case_name", sorted(_MALFORMED_RESPONSE_CASES))
+    def test_raises_execution_infrastructure_error(self, case_name):
+        body = _MALFORMED_RESPONSE_CASES[case_name]
+        with pytest.raises(ExecutionInfrastructureError):
+            _execute_with_fake_response(body)
+
+    @pytest.mark.parametrize("case_name", sorted(_MALFORMED_RESPONSE_CASES))
+    def test_message_is_safe_constant(self, case_name):
+        body = _MALFORMED_RESPONSE_CASES[case_name]
+        with pytest.raises(ExecutionInfrastructureError) as exc_info:
+            _execute_with_fake_response(body)
+        assert str(exc_info.value) == "Bybit execution infrastructure failure"
+
+    @pytest.mark.parametrize("case_name", sorted(_MALFORMED_RESPONSE_CASES))
+    def test_message_does_not_contain_body_bytes(self, case_name):
+        body = _MALFORMED_RESPONSE_CASES[case_name]
+        with pytest.raises(ExecutionInfrastructureError) as exc_info:
+            _execute_with_fake_response(body)
+        assert "502" not in str(exc_info.value)
+        assert "html" not in str(exc_info.value)
+        assert "retCode" not in str(exc_info.value)
+        assert "orderLinkId" not in str(exc_info.value)
+
+    @pytest.mark.parametrize("case_name", sorted(_MALFORMED_RESPONSE_CASES))
+    def test_cause_chain_conserves_technical_detail(self, case_name):
+        body = _MALFORMED_RESPONSE_CASES[case_name]
+        with pytest.raises(ExecutionInfrastructureError) as exc_info:
+            _execute_with_fake_response(body)
+        assert exc_info.value.__cause__ is not None
+
+    @pytest.mark.parametrize("case_name", sorted(_MALFORMED_RESPONSE_CASES))
+    def test_no_bybit_type_crosses_the_port(self, case_name):
+        body = _MALFORMED_RESPONSE_CASES[case_name]
+        try:
+            _execute_with_fake_response(body)
+            assert False, "expected ExecutionInfrastructureError"
+        except ExecutionInfrastructureError:
+            pass
+        except BybitResponseProcessingError:
+            pytest.fail("BybitResponseProcessingError must not cross the ExecutionGateway boundary")
+        except (UnicodeDecodeError, KeyError, TypeError, ValueError):
+            pytest.fail(f"raw technical exception leaked across the Port for case {case_name!r}")
+
+    def test_correct_response_returns_accepted(self):
+        body = (
+            b'{"retCode":0,"retMsg":"OK",'
+            b'"result":{"orderId":"bybit-order-1","orderLinkId":"phoenix-test-order-001"},'
+            b'"retExtInfo":{},"time":1}'
+        )
+        result = _execute_with_fake_response(body)
+        assert isinstance(result, ExecutionResult)
+        assert result.status == "accepted"
+        assert result.exchange_order_id == "bybit-order-1"
+
+
+# ---------------------------------------------------------------------------
+# B.7. Bugs internos que continúan propagando sin envolver (integración real)
+# ---------------------------------------------------------------------------
+
+class _BuggyPrivateApi(BybitPrivateApi):
+    def __init__(self, error: BaseException):
+        self._error = error
+
+    def request(self, *, url, payload):
+        raise self._error
+
+
+class TestInternalBugsPropagateUnwrappedIntegration:
+    """A diferencia de las respuestas remotas malformadas, un defecto de
+    programación dentro del adaptador (no originado en una respuesta de
+    Bybit) debe seguir propagando crudo, sin convertirse en
+    ExecutionInfrastructureError."""
+
+    def test_attribute_error_from_client_propagates(self):
+        gw = _build_gateway(_BuggyPrivateApi(AttributeError("bug: no such attribute")))
+        with pytest.raises(AttributeError):
+            gw.execute(_make_execution_request())
+
+    def test_assertion_error_from_client_propagates(self):
+        gw = _build_gateway(_BuggyPrivateApi(AssertionError("invariant broken")))
+        with pytest.raises(AssertionError):
+            gw.execute(_make_execution_request())
+
+    def test_zero_division_error_from_client_propagates(self):
+        gw = _build_gateway(_BuggyPrivateApi(ZeroDivisionError("division by zero")))
+        with pytest.raises(ZeroDivisionError):
+            gw.execute(_make_execution_request())
+
+    def test_runtime_error_from_client_propagates(self):
+        gw = _build_gateway(_BuggyPrivateApi(RuntimeError("unexpected internal state")))
+        with pytest.raises(RuntimeError):
+            gw.execute(_make_execution_request())
+
+    def test_internal_bugs_not_disguised_as_infrastructure_error(self):
+        gw = _build_gateway(_BuggyPrivateApi(AttributeError("bug")))
+        try:
+            gw.execute(_make_execution_request())
+            assert False, "expected AttributeError"
+        except ExecutionInfrastructureError:
+            pytest.fail("internal AttributeError must not be disguised as ExecutionInfrastructureError")
+        except AttributeError:
+            pass

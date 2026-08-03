@@ -15,8 +15,8 @@ class HttpRequest:
         if not self.url or self.url.isspace():
             raise ValueError("url must not be empty or whitespace-only")
 
-        if not isinstance(self.headers, dict):
-            raise TypeError(f"headers must be dict, got: {type(self.headers).__name__}")
+        if not isinstance(self.headers, Mapping):
+            raise TypeError(f"headers must be a Mapping, got: {type(self.headers).__name__}")
         for k, v in self.headers.items():
             if not isinstance(k, str):
                 raise TypeError(f"header key must be str, got: {type(k).__name__}")

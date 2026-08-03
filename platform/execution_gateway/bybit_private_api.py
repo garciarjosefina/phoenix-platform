@@ -1,6 +1,9 @@
 from execution_gateway.bybit_private_request_sender import BybitPrivateRequestSender
 from execution_gateway.bybit_response import BybitResponse
 from execution_gateway.bybit_response_parser import BybitResponseParser
+from execution_gateway.bybit_response_processing_error import BybitResponseProcessingError
+
+_PROCESSING_ERROR_MESSAGE = "Bybit response could not be processed"
 
 
 class BybitPrivateApi:
@@ -26,5 +29,9 @@ class BybitPrivateApi:
         if not url or url.isspace():
             raise ValueError("url must not be empty or whitespace-only")
 
-        response_text = self._sender.send(url=url, payload=payload)
+        try:
+            response_text = self._sender.send(url=url, payload=payload)
+        except UnicodeDecodeError as error:
+            raise BybitResponseProcessingError(message=_PROCESSING_ERROR_MESSAGE) from error
+
         return self._response_parser.parse(response_text=response_text)

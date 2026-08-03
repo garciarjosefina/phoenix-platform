@@ -3,6 +3,9 @@ from collections.abc import Mapping
 from execution_gateway.bybit_api_error import BybitApiError
 from execution_gateway.bybit_create_order_result import BybitCreateOrderResult
 from execution_gateway.bybit_response import BybitResponse
+from execution_gateway.bybit_response_processing_error import BybitResponseProcessingError
+
+_PROCESSING_ERROR_MESSAGE = "Bybit response could not be processed"
 
 
 class BybitCreateOrderResponseInterpreter:
@@ -20,30 +23,15 @@ class BybitCreateOrderResponseInterpreter:
 
         result = response.result
         if not isinstance(result, Mapping):
-            raise TypeError(
-                f"result must be a mapping, got: {type(result).__name__}"
+            raise BybitResponseProcessingError(message=_PROCESSING_ERROR_MESSAGE)
+
+        if "orderId" not in result or "orderLinkId" not in result:
+            raise BybitResponseProcessingError(message=_PROCESSING_ERROR_MESSAGE)
+
+        try:
+            return BybitCreateOrderResult(
+                order_id=result["orderId"],
+                order_link_id=result["orderLinkId"],
             )
-
-        if "orderId" not in result:
-            raise ValueError("result is missing required key 'orderId'")
-
-        if "orderLinkId" not in result:
-            raise ValueError("result is missing required key 'orderLinkId'")
-
-        order_id = result["orderId"]
-        order_link_id = result["orderLinkId"]
-
-        if not isinstance(order_id, str):
-            raise TypeError(
-                f"orderId must be str, got: {type(order_id).__name__}"
-            )
-
-        if not isinstance(order_link_id, str):
-            raise TypeError(
-                f"orderLinkId must be str, got: {type(order_link_id).__name__}"
-            )
-
-        return BybitCreateOrderResult(
-            order_id=order_id,
-            order_link_id=order_link_id,
-        )
+        except (TypeError, ValueError) as error:
+            raise BybitResponseProcessingError(message=_PROCESSING_ERROR_MESSAGE) from error

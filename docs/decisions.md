@@ -185,3 +185,16 @@
 **Archivo nuevo:** `execution_request_not_supported_error.py`.
 **No modificado:** `phoenix_core`, `BybitDemoClient`, authenticator, request builder, sender, serializer, factories inferiores, Composition Root. Sin dependencias nuevas.
 **Deuda que permanece fuera de alcance (documentada, no bloqueante):** duplicación de la constante de longitud 36 entre `BybitCreateOrderRequest`/`BybitCreateOrderResult`/el adaptador; `time_in_force`/`reduce_only` fijados rígidamente por el adaptador (el dominio no modela vigencia ni reduce-only); doble validación preexistente de `recv_window_ms`/`timeout_seconds` entre composition roots y sus consumidores (hitos 3.51/3.52/3.59/3.60). No existe conexión real con Bybit Demo.
+
+---
+
+## Corrección final de Auditoría A — `BybitResponseProcessingError`
+
+**Fecha:** 2026-08-03
+**Decisión:** Se introduce `BybitResponseProcessingError` (`bybit_response_processing_error.py`) como excepción interna, específica de Bybit, que representa exclusivamente: *la respuesta remota fue recibida, pero no pudo decodificarse, parsearse o interpretarse*. Nunca forma parte del dominio ni cruza `execute()`. `BybitExecutionGateway` captura únicamente `(OSError, BybitResponseProcessingError)` y los traduce a `ExecutionInfrastructureError(message="Bybit execution infrastructure failure")`, con la excepción original en `__cause__`.
+**Razón:** La reauditoría del Core Hardening Pack A demostró, mediante integración productiva real sustituyendo sólo `urlopen`, que 6 de 7 respuestas malformadas ya recibidas de la red (body no-UTF8, JSON inválido, esquema con claves/tipos incorrectos) escapaban como excepción cruda (`UnicodeDecodeError`, `KeyError`, `TypeError`) en lugar de clasificarse como el fallo operacional ambiguo que representan.
+**Principio arquitectónico permanente establecido:** la traducción de un error concreto y conocido a un tipo normalizado ocurre siempre en el componente que sabe de dónde proviene ese error — nunca mediante un `except Exception` amplio en una capa superior. `bybit_private_api.py` traduce `UnicodeDecodeError` (frontera entre transporte genérico y procesamiento Bybit); `bybit_response_parser.py` traduce `JSONDecodeError` y los fallos de construcción de `BybitResponse`; `bybit_create_order_response_interpreter.py` traduce los fallos de construcción de `BybitCreateOrderResult`. El gateway, en el nivel más alto, sólo captura tipos ya normalizados y concretos — nunca vuelve a inspeccionar el origen técnico del error.
+**Consecuencias:**
+- `UrllibHttpTransport` permanece exchange-agnóstico (no se le agregó ningún tipo Bybit); la traducción vive en la capa que ya es Bybit-específica.
+- `HttpRequest.headers` pasa a aceptar cualquier `Mapping[str, str]` válido (antes exigía `dict` exacto, rompiendo el round-trip con sus propios headers ya expuestos).
+- Verificado con batería de mutación (8/8 detectadas), incluida una mutación que reveló un hueco real de cobertura en `bybit_private_api.py` (mensaje sin sanear), cerrado antes de commitear.

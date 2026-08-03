@@ -6,6 +6,7 @@ from execution_gateway.bybit_create_order_response_interpreter import (
 )
 from execution_gateway.bybit_create_order_result import BybitCreateOrderResult
 from execution_gateway.bybit_response import BybitResponse
+from execution_gateway.bybit_response_processing_error import BybitResponseProcessingError
 import execution_gateway
 import execution_gateway.bybit_create_order_response_interpreter as _module
 
@@ -260,27 +261,27 @@ class TestResultValidation:
 
     def test_rejects_none_result(self):
         r = _make_response(result=None)
-        with pytest.raises(TypeError, match="result must be a mapping"):
+        with pytest.raises(BybitResponseProcessingError):
             _interp().interpret(response=r)
 
     def test_rejects_list_result(self):
         r = _make_response(result=[{"orderId": "id", "orderLinkId": "link"}])
-        with pytest.raises(TypeError, match="result must be a mapping"):
+        with pytest.raises(BybitResponseProcessingError):
             _interp().interpret(response=r)
 
     def test_rejects_string_result(self):
         r = _make_response(result='{"orderId": "id"}')
-        with pytest.raises(TypeError, match="result must be a mapping"):
+        with pytest.raises(BybitResponseProcessingError):
             _interp().interpret(response=r)
 
     def test_rejects_int_result(self):
         r = _make_response(result=42)
-        with pytest.raises(TypeError, match="result must be a mapping"):
+        with pytest.raises(BybitResponseProcessingError):
             _interp().interpret(response=r)
 
     def test_rejects_object_result(self):
         r = _make_response(result=object())
-        with pytest.raises(TypeError, match="result must be a mapping"):
+        with pytest.raises(BybitResponseProcessingError):
             _interp().interpret(response=r)
 
     def test_does_not_modify_mapping(self):
@@ -309,34 +310,34 @@ class TestResultValidation:
 # ---------------------------------------------------------------------------
 
 class TestRequiredKeys:
-    def test_missing_order_id_raises_value_error(self):
+    def test_missing_order_id_raises_processing_error(self):
         r = _make_response(result={"orderLinkId": "link"})
-        with pytest.raises(ValueError, match="orderId"):
+        with pytest.raises(BybitResponseProcessingError):
             _interp().interpret(response=r)
 
-    def test_missing_order_link_id_raises_value_error(self):
+    def test_missing_order_link_id_raises_processing_error(self):
         r = _make_response(result={"orderId": "id"})
-        with pytest.raises(ValueError, match="orderLinkId"):
+        with pytest.raises(BybitResponseProcessingError):
             _interp().interpret(response=r)
 
-    def test_missing_both_raises_value_error(self):
+    def test_missing_both_raises_processing_error(self):
         r = _make_response(result={})
-        with pytest.raises(ValueError):
+        with pytest.raises(BybitResponseProcessingError):
             _interp().interpret(response=r)
 
     def test_rejects_snake_case_order_id(self):
         r = _make_response(result={"order_id": "id", "orderLinkId": "link"})
-        with pytest.raises(ValueError, match="orderId"):
+        with pytest.raises(BybitResponseProcessingError):
             _interp().interpret(response=r)
 
     def test_rejects_snake_case_order_link_id(self):
         r = _make_response(result={"orderId": "id", "order_link_id": "link"})
-        with pytest.raises(ValueError, match="orderLinkId"):
+        with pytest.raises(BybitResponseProcessingError):
             _interp().interpret(response=r)
 
     def test_no_default_values_for_missing_keys(self):
         r = _make_response(result={"orderLinkId": "link"})
-        with pytest.raises(ValueError):
+        with pytest.raises(BybitResponseProcessingError):
             _interp().interpret(response=r)
 
 
@@ -357,32 +358,32 @@ class TestValueTypes:
 
     def test_rejects_int_order_id(self):
         r = _make_response(result={"orderId": 123456789, "orderLinkId": "link"})
-        with pytest.raises(TypeError, match="orderId must be str"):
+        with pytest.raises(BybitResponseProcessingError):
             _interp().interpret(response=r)
 
     def test_rejects_none_order_id(self):
         r = _make_response(result={"orderId": None, "orderLinkId": "link"})
-        with pytest.raises(TypeError, match="orderId must be str"):
+        with pytest.raises(BybitResponseProcessingError):
             _interp().interpret(response=r)
 
     def test_rejects_int_order_link_id(self):
         r = _make_response(result={"orderId": "id", "orderLinkId": 42})
-        with pytest.raises(TypeError, match="orderLinkId must be str"):
+        with pytest.raises(BybitResponseProcessingError):
             _interp().interpret(response=r)
 
     def test_rejects_none_order_link_id(self):
         r = _make_response(result={"orderId": "id", "orderLinkId": None})
-        with pytest.raises(TypeError, match="orderLinkId must be str"):
+        with pytest.raises(BybitResponseProcessingError):
             _interp().interpret(response=r)
 
     def test_does_not_convert_int_order_id_via_str(self):
         r = _make_response(result={"orderId": 999, "orderLinkId": "link"})
-        with pytest.raises(TypeError):
+        with pytest.raises(BybitResponseProcessingError):
             _interp().interpret(response=r)
 
     def test_does_not_convert_int_order_link_id_via_str(self):
         r = _make_response(result={"orderId": "id", "orderLinkId": 99})
-        with pytest.raises(TypeError):
+        with pytest.raises(BybitResponseProcessingError):
             _interp().interpret(response=r)
 
 
@@ -391,29 +392,35 @@ class TestValueTypes:
 # ---------------------------------------------------------------------------
 
 class TestDelegationToValueObject:
-    def test_empty_order_id_propagates(self):
+    """El intérprete delega la construcción a BybitCreateOrderResult, cuyas
+    invariantes (no vacío, no whitespace-only, longitud máxima) son la fuente
+    de verdad. Cualquier TypeError/ValueError que genere esa delegación se
+    traduce a BybitResponseProcessingError: la respuesta remota trajo un
+    orderId/orderLinkId que no cumple el contrato del value object."""
+
+    def test_empty_order_id_propagates_as_processing_error(self):
         r = _make_response(result={"orderId": "", "orderLinkId": "link"})
-        with pytest.raises(ValueError):
+        with pytest.raises(BybitResponseProcessingError):
             _interp().interpret(response=r)
 
-    def test_whitespace_only_order_id_propagates(self):
+    def test_whitespace_only_order_id_propagates_as_processing_error(self):
         r = _make_response(result={"orderId": "   ", "orderLinkId": "link"})
-        with pytest.raises(ValueError):
+        with pytest.raises(BybitResponseProcessingError):
             _interp().interpret(response=r)
 
-    def test_empty_order_link_id_propagates(self):
+    def test_empty_order_link_id_propagates_as_processing_error(self):
         r = _make_response(result={"orderId": "id", "orderLinkId": ""})
-        with pytest.raises(ValueError):
+        with pytest.raises(BybitResponseProcessingError):
             _interp().interpret(response=r)
 
-    def test_whitespace_only_order_link_id_propagates(self):
+    def test_whitespace_only_order_link_id_propagates_as_processing_error(self):
         r = _make_response(result={"orderId": "id", "orderLinkId": "   "})
-        with pytest.raises(ValueError):
+        with pytest.raises(BybitResponseProcessingError):
             _interp().interpret(response=r)
 
-    def test_order_link_id_length_37_propagates(self):
+    def test_order_link_id_length_37_propagates_as_processing_error(self):
         r = _make_response(result={"orderId": "id", "orderLinkId": "x" * 37})
-        with pytest.raises(ValueError):
+        with pytest.raises(BybitResponseProcessingError):
             _interp().interpret(response=r)
 
     def test_order_link_id_length_36_accepted(self):
@@ -422,10 +429,17 @@ class TestDelegationToValueObject:
         result = _interp().interpret(response=r)
         assert result.order_link_id == lid
 
-    def test_value_object_exceptions_propagate_exactly(self):
+    def test_value_object_exception_conserved_as_cause(self):
         r = _make_response(result={"orderId": "", "orderLinkId": "link"})
-        with pytest.raises(ValueError):
+        with pytest.raises(BybitResponseProcessingError) as exc_info:
             _interp().interpret(response=r)
+        assert isinstance(exc_info.value.__cause__, ValueError)
+
+    def test_processing_error_message_is_safe_constant(self):
+        r = _make_response(result={"orderId": "", "orderLinkId": "link"})
+        with pytest.raises(BybitResponseProcessingError) as exc_info:
+            _interp().interpret(response=r)
+        assert str(exc_info.value) == "Bybit response could not be processed"
 
 
 # ---------------------------------------------------------------------------

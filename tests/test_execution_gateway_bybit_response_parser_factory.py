@@ -12,6 +12,7 @@ from execution_gateway.bybit_private_api_factory import create_bybit_private_api
 from execution_gateway.bybit_private_request_sender import BybitPrivateRequestSender
 from execution_gateway.bybit_response import BybitResponse
 from execution_gateway.bybit_response_parser import BybitResponseParser
+from execution_gateway.bybit_response_processing_error import BybitResponseProcessingError
 from execution_gateway.bybit_response_parser_factory import create_bybit_response_parser
 from execution_gateway.json_serializer import JsonSerializer
 
@@ -387,9 +388,9 @@ class TestIntegratedBehavior:
         parser.parse(response_text='{"retCode":0,"retMsg":"OK","result":{},"retExtInfo":{},"time":1000}')
         assert len(spy.loads_calls) == 1
 
-    def test_invalid_response_structure_raises_type_error(self):
+    def test_invalid_response_structure_raises_processing_error(self):
         parser = create_bybit_response_parser(serializer=RejectingSerializer())
-        with pytest.raises(TypeError):
+        with pytest.raises(BybitResponseProcessingError):
             parser.parse(response_text="[]")
 
     def test_parse_does_not_call_dumps(self):

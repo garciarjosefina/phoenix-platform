@@ -1,4 +1,3 @@
-import json
 import math
 from decimal import Decimal
 
@@ -6,6 +5,7 @@ from execution_gateway.bybit_api_error import BybitApiError
 from execution_gateway.bybit_client import BybitDemoClient
 from execution_gateway.bybit_create_order_request import BybitCreateOrderRequest
 from execution_gateway.bybit_create_order_result import BybitCreateOrderResult
+from execution_gateway.bybit_response_processing_error import BybitResponseProcessingError
 from execution_gateway.contracts import ExecutionRequest, ExecutionResult
 from execution_gateway.execution_infrastructure_error import ExecutionInfrastructureError
 from execution_gateway.execution_request_not_supported_error import ExecutionRequestNotSupportedError
@@ -22,15 +22,18 @@ _ORDER_ID_MAX_LEN = 36
 # rechazo de negocio.
 _ORDER_REJECTION_RET_CODES = frozenset({10001, 110003, 110004, 110007})
 
-# Fallos concretos y conocidos de la cadena de transporte: errores de
-# red/socket/HTTP (urllib.error.URLError y HTTPError son subclases de
-# OSError, igual que los timeouts de socket) y respuestas cuyo cuerpo no es
-# JSON válido (json.JSONDecodeError, subclase concreta de ValueError que
-# sólo se produce ante un body ilegible, nunca ante una validación de
-# dominio). Cualquier otra excepción -TypeError, ValueError genérico,
-# AttributeError, KeyError, AssertionError- no se envuelve: representa un
+# Fallos concretos y conocidos: errores de red/socket/HTTP (urllib.error.URLError
+# y HTTPError son subclases de OSError, igual que los timeouts de socket) y
+# BybitResponseProcessingError -la respuesta remota fue recibida pero no pudo
+# decodificarse, parsearse o interpretarse; la traducción desde los fallos
+# concretos que la producen (UnicodeDecodeError, json.JSONDecodeError, JSON
+# con esquema inválido) ocurre en la frontera inferior (bybit_private_api.py,
+# bybit_response_parser.py, bybit_create_order_response_interpreter.py), que
+# son los únicos componentes que saben que esos errores provienen de una
+# respuesta remota. Cualquier otra excepción -TypeError, ValueError genérico,
+# AttributeError, KeyError, AssertionError- no se envuelve aquí: representa un
 # defecto de programación o una invariante rota, no una falla operacional.
-_TRANSPORT_FAILURES = (OSError, json.JSONDecodeError)
+_TRANSPORT_FAILURES = (OSError, BybitResponseProcessingError)
 
 _INFRASTRUCTURE_MESSAGE = "Bybit execution infrastructure failure"
 _ADAPTATION_ERROR_MESSAGE = "Execution request cannot be represented by the selected adapter"
