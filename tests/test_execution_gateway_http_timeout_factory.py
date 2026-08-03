@@ -7,8 +7,12 @@ import execution_gateway
 import execution_gateway.http_timeout_factory as _module
 from execution_gateway.bybit_authenticator_factory import create_bybit_authenticator
 from execution_gateway.bybit_demo_credentials_factory import create_bybit_demo_credentials
+from execution_gateway.bybit_demo_execution_config import BybitDemoExecutionConfig
 from execution_gateway.bybit_demo_execution_gateway_factory import create_bybit_demo_execution_gateway
 from execution_gateway.bybit_gateway import BybitExecutionGateway
+from execution_gateway.configured_bybit_demo_execution_gateway_factory import (
+    create_configured_bybit_demo_execution_gateway,
+)
 from execution_gateway.bybit_header_builder_factory import create_bybit_header_builder
 from execution_gateway.bybit_private_api_factory import create_bybit_private_api
 from execution_gateway.bybit_private_request_sender_factory import create_bybit_private_request_sender
@@ -238,21 +242,33 @@ class TestRangeValidation:
 
 
 # ---------------------------------------------------------------------------
-# 7. NaN e infinito — comportamiento productivo exacto
+# 7. NaN e infinito — deben ser rechazados como no finitos
 # ---------------------------------------------------------------------------
 
 class TestNanAndInfinity:
-    def test_nan_accepted(self):
-        result = create_http_timeout_seconds(timeout_seconds=math.nan)
-        assert math.isnan(result)
+    def test_nan_raises_value_error(self):
+        with pytest.raises(ValueError, match="timeout_seconds must be finite, got: nan"):
+            create_http_timeout_seconds(timeout_seconds=math.nan)
 
-    def test_positive_infinity_accepted(self):
-        result = create_http_timeout_seconds(timeout_seconds=math.inf)
-        assert math.isinf(result) and result > 0
+    def test_positive_infinity_raises_value_error(self):
+        with pytest.raises(ValueError, match=r"timeout_seconds must be finite, got: inf"):
+            create_http_timeout_seconds(timeout_seconds=math.inf)
 
     def test_negative_infinity_raises_value_error(self):
         with pytest.raises(ValueError, match="timeout_seconds must be > 0"):
             create_http_timeout_seconds(timeout_seconds=-math.inf)
+
+    def test_nan_error_is_value_error_not_type_error(self):
+        with pytest.raises(ValueError):
+            create_http_timeout_seconds(timeout_seconds=math.nan)
+
+    def test_positive_infinity_error_message_exact(self):
+        with pytest.raises(ValueError, match=r"^timeout_seconds must be finite, got: inf$"):
+            create_http_timeout_seconds(timeout_seconds=math.inf)
+
+    def test_nan_error_message_exact(self):
+        with pytest.raises(ValueError, match=r"^timeout_seconds must be finite, got: nan$"):
+            create_http_timeout_seconds(timeout_seconds=math.nan)
 
 
 # ---------------------------------------------------------------------------
@@ -603,6 +619,67 @@ class TestFullIntegrationNoExecution:
         monkeypatch.setattr(UrllibHttpTransport, "post", spy_post)
         self._build_full_stack()
         assert calls == []
+
+    @pytest.mark.parametrize("bad_timeout", [math.nan, math.inf])
+    def test_non_finite_timeout_never_reaches_urlopen(self, monkeypatch, bad_timeout):
+        import urllib.request
+
+        def exploding_urlopen(*args, **kwargs):
+            raise AssertionError("urlopen must not be called with a non-finite timeout")
+
+        monkeypatch.setattr(urllib.request, "urlopen", exploding_urlopen)
+        with pytest.raises(ValueError, match="timeout_seconds must be finite"):
+            self._build_full_stack(timeout=bad_timeout)
+
+    @pytest.mark.parametrize("bad_timeout", [math.nan, math.inf])
+    def test_non_finite_timeout_never_reaches_socket_settimeout(self, monkeypatch, bad_timeout):
+        import socket
+
+        def exploding_settimeout(self, *args, **kwargs):
+            raise AssertionError("socket.settimeout must not be called with a non-finite timeout")
+
+        monkeypatch.setattr(socket.socket, "settimeout", exploding_settimeout)
+        with pytest.raises(ValueError, match="timeout_seconds must be finite"):
+            self._build_full_stack(timeout=bad_timeout)
+
+
+# ---------------------------------------------------------------------------
+# 15b. Paridad exacta — factory / config / composition root
+# ---------------------------------------------------------------------------
+
+def _raised(fn):
+    try:
+        fn()
+        return None
+    except Exception as e:
+        return e
+
+
+class TestNonFiniteParityAcrossLayers:
+    @pytest.mark.parametrize("bad_timeout", [math.nan, math.inf, -math.inf])
+    def test_factory_and_config_raise_identical_error(self, bad_timeout):
+        factory_error = _raised(lambda: create_http_timeout_seconds(timeout_seconds=bad_timeout))
+        config_error = _raised(lambda: BybitDemoExecutionConfig(
+            api_key=_VALID_KEY, api_secret=_VALID_SECRET,
+            recv_window_ms=5_000, timeout_seconds=bad_timeout,
+        ))
+        assert type(factory_error) is type(config_error)
+        assert str(factory_error) == str(config_error)
+
+    @pytest.mark.parametrize("bad_timeout", [math.nan, math.inf, -math.inf])
+    def test_composition_root_rejects_before_gateway_construction(self, bad_timeout):
+        factory_error = _raised(lambda: create_http_timeout_seconds(timeout_seconds=bad_timeout))
+
+        def build_via_composition_root():
+            config = BybitDemoExecutionConfig(
+                api_key=_VALID_KEY, api_secret=_VALID_SECRET,
+                recv_window_ms=5_000, timeout_seconds=bad_timeout,
+            )
+            return create_configured_bybit_demo_execution_gateway(config=config)
+
+        composition_error = _raised(build_via_composition_root)
+        assert type(factory_error) is type(composition_error)
+        assert str(factory_error) == str(composition_error)
 
 
 # ---------------------------------------------------------------------------

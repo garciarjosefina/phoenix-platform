@@ -5,6 +5,10 @@ from execution_gateway.bybit_authenticator import BybitAuthentication, BybitAuth
 from execution_gateway.bybit_header_builder import BybitHeaderBuilder
 from execution_gateway.http_request import HttpRequest
 from execution_gateway.json_serializer import JsonSerializer
+from execution_gateway.credentials import BybitDemoCredentials
+from execution_gateway.hmac_sha256_signer import HmacSha256Signer
+from execution_gateway.standard_bybit_authenticator import StandardBybitAuthenticator
+from execution_gateway.standard_json_serializer import StandardJsonSerializer
 
 
 # ── helpers ────────────────────────────────────────────────────────────────
@@ -353,3 +357,100 @@ class TestNoSideEffects:
         auth = BybitAuthentication(timestamp_ms=1, api_key="k", recv_window_ms=1, signature="s")
         headers = BybitHeaderBuilder().build(authentication=auth)
         assert len(headers) == 5
+
+
+# ── statelessness across consecutive build() calls ─────────────────────────
+
+class _IncrementingClock:
+    def __init__(self, start_ms: int = 1_700_000_000_000) -> None:
+        self._value = start_ms
+
+    def now_ms(self) -> int:
+        self._value += 60_000
+        return self._value
+
+
+def _make_real_builder() -> BybitRequestBuilder:
+    credentials = BybitDemoCredentials(api_key="ORDER-KEY", api_secret="ORDER-SECRET")
+    authenticator = StandardBybitAuthenticator(
+        credentials=credentials,
+        clock=_IncrementingClock(),
+        signer=HmacSha256Signer(),
+        recv_window_ms=5_000,
+    )
+    return BybitRequestBuilder(
+        serializer=StandardJsonSerializer(),
+        authenticator=authenticator,
+        header_builder=BybitHeaderBuilder(),
+    )
+
+
+class TestStatelessAcrossConsecutiveBuilds:
+    def test_different_bodies_for_different_orders(self):
+        builder = _make_real_builder()
+        r1 = builder.build(url="https://x", payload={"orderLinkId": "ORDEN-1", "qty": "0.001"})
+        r2 = builder.build(url="https://x", payload={"orderLinkId": "ORDEN-2", "qty": "99.0"})
+        assert r1.body != r2.body
+        assert "ORDEN-1" in r1.body
+        assert "ORDEN-2" in r2.body
+
+    def test_different_signatures_for_different_orders(self):
+        builder = _make_real_builder()
+        r1 = builder.build(url="https://x", payload={"orderLinkId": "ORDEN-1", "qty": "0.001"})
+        r2 = builder.build(url="https://x", payload={"orderLinkId": "ORDEN-2", "qty": "99.0"})
+        assert r1.headers["X-BAPI-SIGN"] != r2.headers["X-BAPI-SIGN"]
+
+    def test_different_timestamps_for_consecutive_calls(self):
+        builder = _make_real_builder()
+        r1 = builder.build(url="https://x", payload={"orderLinkId": "ORDEN-1", "qty": "0.001"})
+        r2 = builder.build(url="https://x", payload={"orderLinkId": "ORDEN-2", "qty": "99.0"})
+        assert r1.headers["X-BAPI-TIMESTAMP"] != r2.headers["X-BAPI-TIMESTAMP"]
+
+    def test_distinct_request_objects(self):
+        builder = _make_real_builder()
+        r1 = builder.build(url="https://x", payload={"orderLinkId": "ORDEN-1", "qty": "0.001"})
+        r2 = builder.build(url="https://x", payload={"orderLinkId": "ORDEN-2", "qty": "99.0"})
+        assert r1 is not r2
+        assert r1.headers is not r2.headers
+
+    def test_second_request_does_not_share_references_with_first(self):
+        builder = _make_real_builder()
+        r1 = builder.build(url="https://x", payload={"orderLinkId": "ORDEN-1", "qty": "0.001"})
+        r2 = builder.build(url="https://x", payload={"orderLinkId": "ORDEN-2", "qty": "99.0"})
+        assert dict(r1.headers) != dict(r2.headers)
+        assert r1.headers["X-BAPI-SIGN"] != r2.headers["X-BAPI-SIGN"]
+        assert r1.headers["X-BAPI-TIMESTAMP"] != r2.headers["X-BAPI-TIMESTAMP"]
+
+    def test_third_call_independent_of_first_two(self):
+        builder = _make_real_builder()
+        r1 = builder.build(url="https://x", payload={"orderLinkId": "ORDEN-1", "qty": "0.001"})
+        r2 = builder.build(url="https://x", payload={"orderLinkId": "ORDEN-2", "qty": "99.0"})
+        r3 = builder.build(url="https://x", payload={"orderLinkId": "ORDEN-3", "qty": "5.0"})
+        assert len({r1.body, r2.body, r3.body}) == 3
+        assert len({r1.headers["X-BAPI-SIGN"], r2.headers["X-BAPI-SIGN"], r3.headers["X-BAPI-SIGN"]}) == 3
+
+    def test_builder_gains_no_new_attributes_after_multiple_builds(self):
+        builder = _make_real_builder()
+        before = set(vars(builder))
+        builder.build(url="https://x", payload={"orderLinkId": "ORDEN-1", "qty": "0.001"})
+        builder.build(url="https://x", payload={"orderLinkId": "ORDEN-2", "qty": "99.0"})
+        after = set(vars(builder))
+        assert before == after
+        assert after == {"_serializer", "_authenticator", "_header_builder"}
+
+    def test_vars_identical_before_and_after_multiple_builds(self):
+        builder = _make_real_builder()
+        before = dict(vars(builder))
+        builder.build(url="https://x", payload={"orderLinkId": "ORDEN-1", "qty": "0.001"})
+        builder.build(url="https://x", payload={"orderLinkId": "ORDEN-2", "qty": "99.0"})
+        after = dict(vars(builder))
+        assert before.keys() == after.keys()
+        for key in before:
+            assert before[key] is after[key]
+
+    def test_second_order_does_not_resend_first_orders_body(self):
+        builder = _make_real_builder()
+        r1 = builder.build(url="https://x", payload={"orderLinkId": "ORDEN-1", "qty": "0.001"})
+        r2 = builder.build(url="https://x", payload={"orderLinkId": "ORDEN-2", "qty": "99.0"})
+        assert "ORDEN-1" not in r2.body
+        assert "0.001" not in r2.body

@@ -1,3 +1,6 @@
+import math
+
+
 def create_http_timeout_seconds(*, timeout_seconds: int | float) -> int | float:
     if isinstance(timeout_seconds, bool) or not isinstance(timeout_seconds, (int, float)):
         raise TypeError(
@@ -5,4 +8,6 @@ def create_http_timeout_seconds(*, timeout_seconds: int | float) -> int | float:
         )
     if timeout_seconds <= 0:
         raise ValueError(f"timeout_seconds must be > 0, got: {timeout_seconds}")
+    if not math.isfinite(timeout_seconds):
+        raise ValueError(f"timeout_seconds must be finite, got: {timeout_seconds}")
     return timeout_seconds

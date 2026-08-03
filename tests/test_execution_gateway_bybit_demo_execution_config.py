@@ -300,13 +300,13 @@ class TestTimeoutValidation:
         config = _build(timeout_seconds=MyFloat(5.0))
         assert config.timeout_seconds == 5.0
 
-    def test_nan_accepted_matching_current_contract(self):
-        config = _build(timeout_seconds=math.nan)
-        assert math.isnan(config.timeout_seconds)
+    def test_nan_raises_value_error(self):
+        with pytest.raises(ValueError, match="timeout_seconds must be finite"):
+            _build(timeout_seconds=math.nan)
 
-    def test_positive_infinity_accepted_matching_current_contract(self):
-        config = _build(timeout_seconds=math.inf)
-        assert config.timeout_seconds == math.inf
+    def test_positive_infinity_raises_value_error(self):
+        with pytest.raises(ValueError, match="timeout_seconds must be finite"):
+            _build(timeout_seconds=math.inf)
 
     def test_negative_infinity_raises_value_error(self):
         with pytest.raises(ValueError, match="timeout_seconds must be > 0"):
@@ -314,7 +314,7 @@ class TestTimeoutValidation:
 
     @pytest.mark.parametrize(
         "bad_value",
-        [0, -5.0, True, "5", Decimal("5.0"), Fraction(5, 1), None, -math.inf],
+        [0, -5.0, True, "5", Decimal("5.0"), Fraction(5, 1), None, -math.inf, math.nan, math.inf],
     )
     def test_timeout_parity(self, bad_value):
         integral_error = _raised(lambda: _build(timeout_seconds=bad_value))
