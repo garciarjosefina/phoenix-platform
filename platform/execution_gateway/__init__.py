@@ -58,6 +58,10 @@ from execution_gateway.configured_bybit_demo_execution_gateway_factory import (
     create_configured_bybit_demo_execution_gateway,
 )
 from execution_gateway.bybit_demo_execution_config import BybitDemoExecutionConfig
+from execution_gateway.bybit_demo_execution_config_env_loader import (
+    load_bybit_demo_execution_config_from_env,
+)
+from execution_gateway.environment_configuration_error import EnvironmentConfigurationError
 from execution_gateway.execution_infrastructure_error import ExecutionInfrastructureError
 from execution_gateway.execution_request_not_supported_error import ExecutionRequestNotSupportedError
 from execution_gateway.bybit_response_processing_error import BybitResponseProcessingError
@@ -122,6 +126,8 @@ __all__ = [
     "create_bybit_demo_base_url",
     "create_configured_bybit_demo_execution_gateway",
     "BybitDemoExecutionConfig",
+    "load_bybit_demo_execution_config_from_env",
+    "EnvironmentConfigurationError",
     "ExecutionInfrastructureError",
     "ExecutionRequestNotSupportedError",
     "BybitResponseProcessingError",
