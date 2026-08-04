@@ -414,11 +414,37 @@ class TestFullComposition:
         chain = gateway._client._create_order_operation._endpoint_executor._private_api
         assert chain._sender._request_builder._serializer is chain._response_parser._serializer
 
-    def test_base_url_matches_demo_constant(self):
-        from execution_gateway.bybit_demo_execution_gateway_factory import _BYBIT_DEMO_BASE_URL
+    def test_base_url_is_the_literal_bybit_demo_host(self):
+        # Barrera de regresión real: fija el literal productivo, no la
+        # constante contra sí misma (una constante nunca difiere de sí
+        # misma, por lo que esa comparación no detecta un cambio accidental
+        # Demo -> Mainnet). D-011 exige Bybit Demo como único entorno.
         gateway = _build()
         url_builder = gateway._client._create_order_operation._endpoint_executor._url_builder
-        assert url_builder._base_url == _BYBIT_DEMO_BASE_URL
+        assert url_builder._base_url == "https://api-demo.bybit.com"
+
+    def test_base_url_is_not_mainnet(self):
+        gateway = _build()
+        url_builder = gateway._client._create_order_operation._endpoint_executor._url_builder
+        assert url_builder._base_url != "https://api.bybit.com"
+
+    def test_endpoint_url_actually_reached_is_bybit_demo(self, monkeypatch):
+        # Verifica el host contra el que realmente se envía el request HTTP,
+        # no sólo el atributo interno del url builder.
+        captured = {}
+
+        def fake_post(self, *, url, headers, body, timeout_seconds):
+            captured["url"] = url
+            return '{"retCode":0,"retMsg":"OK","result":{"orderId":"1","orderLinkId":"olid-1"},"retExtInfo":{},"time":1}'
+
+        monkeypatch.setattr(UrllibHttpTransport, "post", fake_post)
+        gateway = _build()
+        from execution_gateway.contracts import ExecutionRequest
+        gateway.execute(ExecutionRequest(
+            order_id="olid-1", symbol="BTCUSDT", side="buy",
+            order_type="market", quantity=0.001,
+        ))
+        assert captured["url"] == "https://api-demo.bybit.com/v5/order/create"
 
 
 # ---------------------------------------------------------------------------
