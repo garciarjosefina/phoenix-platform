@@ -645,12 +645,13 @@ class TestSecurity:
 
     def test_environment_configuration_error_message_never_contains_marker(self):
         for env in [
-            _without(_API_KEY_VAR),
-            _env(**{_API_SECRET_VAR: self._MARKER}) | _without(_TIMEOUT_SECONDS_VAR),
+            _without(_API_KEY_VAR) | {_API_SECRET_VAR: self._MARKER},
+            _without(_TIMEOUT_SECONDS_VAR) | {_API_SECRET_VAR: self._MARKER},
         ]:
+            assert env[_API_SECRET_VAR] == self._MARKER  # el marcador debe sobrevivir en el mapping de entrada
             error = _raised(lambda e=env: load_bybit_demo_execution_config_from_env(environ=e))
-            if error is not None:
-                assert self._MARKER not in str(error)
+            assert error is not None
+            assert self._MARKER not in str(error)
 
     def test_does_not_import_dotenv(self):
         assert "dotenv" not in vars(_module)
