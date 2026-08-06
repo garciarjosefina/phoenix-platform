@@ -8,9 +8,6 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 _RAILWAY_TOML = _REPO_ROOT / "railway.toml"
 _RUNNER_MODULE_PATH = _REPO_ROOT / "platform" / "execution_gateway" / "bybit_demo_smoke_runner.py"
 
-_EXPECTED_BUILD_COMMAND = "python3 -m pip install ."
-_EXPECTED_START_COMMAND = "python3 -m execution_gateway.bybit_demo_smoke_runner"
-
 _UUID_RE = re.compile(
     r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
 )
@@ -91,10 +88,6 @@ class TestStartCommand:
         config = _load()
         assert config["deploy"]["startCommand"] == "python3 -m execution_gateway.bybit_demo_smoke_runner"
 
-    def test_deploy_section_has_only_start_command(self):
-        config = _load()
-        assert set(config["deploy"].keys()) == {"startCommand"}
-
     def test_start_command_not_python_dash_c(self):
         config = _load()
         cmd = config["deploy"]["startCommand"]
@@ -139,6 +132,65 @@ class TestStartCommand:
 
 
 # ---------------------------------------------------------------------------
+# 3b. Restart policy — el runner es one-shot; Railway no debe reintentarlo
+# ---------------------------------------------------------------------------
+
+class TestRestartPolicy:
+    def test_restart_policy_type_is_present(self):
+        config = _load()
+        assert "restartPolicyType" in config["deploy"]
+
+    def test_restart_policy_type_is_exactly_never(self):
+        config = _load()
+        assert config["deploy"]["restartPolicyType"] == "NEVER"
+
+    def test_restart_policy_type_is_not_on_failure(self):
+        config = _load()
+        assert config["deploy"]["restartPolicyType"] != "ON_FAILURE"
+
+    def test_restart_policy_type_is_not_always(self):
+        config = _load()
+        assert config["deploy"]["restartPolicyType"] != "ALWAYS"
+
+    def test_restart_policy_type_casing_is_exact(self):
+        config = _load()
+        value = config["deploy"]["restartPolicyType"]
+        assert value == value.upper()
+        assert value != "never"
+        assert value != "Never"
+
+    def test_no_restart_policy_max_retries(self):
+        config = _load()
+        assert "restartPolicyMaxRetries" not in config["deploy"]
+
+    def test_no_second_or_contradictory_restart_policy(self):
+        # una sola clave de política de reinicio, un solo valor, sin
+        # duplicados dentro de [deploy] (tomllib ya rechazaría una clave
+        # TOML duplicada, pero esto además fija que no exista una variante
+        # de nombre alternativa apuntando a otra política).
+        config = _load()
+        deploy = config["deploy"]
+        restart_keys = [k for k in deploy if "restart" in k.lower()]
+        assert restart_keys == ["restartPolicyType"]
+
+    def test_deploy_section_has_only_start_command_and_restart_policy(self):
+        config = _load()
+        assert set(config["deploy"].keys()) == {
+            "startCommand", "restartPolicyType",
+        }
+
+    def test_full_config_has_only_the_expected_shape(self):
+        config = _load()
+        assert config == {
+            "build": {"buildCommand": "python3 -m pip install ."},
+            "deploy": {
+                "startCommand": "python3 -m execution_gateway.bybit_demo_smoke_runner",
+                "restartPolicyType": "NEVER",
+            },
+        }
+
+
+# ---------------------------------------------------------------------------
 # 4. Seguridad y alcance
 # ---------------------------------------------------------------------------
 
@@ -175,13 +227,6 @@ class TestSecurityAndScope:
         deploy = config.get("deploy", {})
         assert "healthcheckPath" not in deploy
         assert "healthcheckTimeout" not in deploy
-
-    def test_no_restart_policy_in_file(self):
-        # Restart Policy Never se configura manualmente en el dashboard,
-        # nunca se asume en el archivo (ver docs del hito).
-        config = _load()
-        assert "restartPolicyType" not in config.get("deploy", {})
-        assert "restartPolicyMaxRetries" not in config.get("deploy", {})
 
     def test_no_replicas(self):
         config = _load()
