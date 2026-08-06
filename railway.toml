@@ -1,0 +1,5 @@
+[build]
+buildCommand = "python3 -m pip install ."
+
+[deploy]
+startCommand = "python3 -m execution_gateway.bybit_demo_smoke_runner"
