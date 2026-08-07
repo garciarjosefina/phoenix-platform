@@ -198,3 +198,20 @@
 - `UrllibHttpTransport` permanece exchange-agnóstico (no se le agregó ningún tipo Bybit); la traducción vive en la capa que ya es Bybit-específica.
 - `HttpRequest.headers` pasa a aceptar cualquier `Mapping[str, str]` válido (antes exigía `dict` exacto, rompiendo el round-trip con sus propios headers ya expuestos).
 - Verificado con batería de mutación (8/8 detectadas), incluida una mutación que reveló un hueco real de cobertura en `bybit_private_api.py` (mensaje sin sanear), cerrado antes de commitear.
+
+---
+
+## D-014 — EU West (Amsterdam) como región Railway por defecto para Bybit; `PYTHONPATH` como deuda técnica de packaging
+
+**Fecha:** 2026-08-07
+**Contexto:** Cierre del Hito 3.68 — primera ejecución real del smoke test (`execution_gateway.bybit_demo_smoke_runner`) desde el servicio Railway `phoenix-smoke-demo` contra Bybit Demo.
+
+**Decisión 1 — Región:** Todo servicio Railway que interactúe con la API de Bybit se despliega, por defecto, en **EU West (Amsterdam, Netherlands / `europe-west4`)**, salvo decisión explícita en contrario documentada.
+**Razón:** A/B limpio, mismo commit y misma configuración salvo una única variable: región US West (California) → `HTTPError` (la conexión y el TLS se establecieron, el rechazo fue de la aplicación — consistente con bloqueo geográfico de Bybit); región EU West (Amsterdam) → `success=True`. Coincide con la región donde ya opera `fib-shadow-canary` contra Bybit.
+**Alcance de la evidencia:** sólo se probaron dos regiones. La regla validada es "no desplegar en regiones de EE. UU.", no "EU West es la única región válida" — Southeast Asia u otras regiones no estadounidenses no fueron descartadas ni confirmadas.
+
+**Decisión 2 — Deuda técnica registrada:** la variable de entorno `PYTHONPATH=/app/platform`, cargada manualmente en `phoenix-smoke-demo`, es un **workaround aceptado, no una solución definitiva**.
+**Razón:** El primer deploy falló con `ModuleNotFoundError: No module named 'execution_gateway'` pese a que `railway.toml` ejecuta `python3 -m pip install .` sin error. Diagnóstico aislado — `git archive HEAD` (commit exacto, sin cambios sin commitear) reconstruido en un venv limpio fuera del repo, reproduciendo literalmente el `buildCommand` — confirmó con evidencia (79 entradas del wheel, `execution_gateway/` completo con sus 66 archivos, módulo importado y ejecutado con éxito desde un directorio ajeno al repo, sin `PYTHONPATH`) que `pyproject.toml`/`tool.setuptools.package-dir`/`tool.setuptools.packages.find` empaquetan e instalan correctamente el paquete. La causa más probable —no confirmada— es el ensamblado de capas de Railpack: los Build Logs muestran un paso `copy /mise/installs, ..., /app` posterior a `python3 -m pip install .`, que podría descartar el `site-packages` recién escrito.
+**Consecuencia no deseada:** `railway.toml` deja de ser la fuente completa de verdad del runtime del servicio — recrear `phoenix-smoke-demo` únicamente desde el repositorio, sin agregar `PYTHONPATH` manualmente en el dashboard, reproduciría el mismo `ModuleNotFoundError`. Compromete el objetivo de reproducibilidad perseguido por los Hitos 3.69 y la corrección post-3.69.
+**Pendiente (explícitamente no resuelto en el Hito 3.68):** investigar la causa exacta del ensamblado de Railpack y restaurar la reproducibilidad completa del servicio exclusivamente desde config-as-code, sin variables manuales en el dashboard.
+**No existe conexión real con Bybit Mainnet en ningún momento; ambas decisiones surgen de ejecuciones reales contra Bybit Demo.**
