@@ -1,7 +1,7 @@
 import pytest
 import execution_gateway
 import execution_gateway.bybit_endpoints as bybit_endpoints_module
-from execution_gateway.bybit_endpoints import BYBIT_CREATE_ORDER_ENDPOINT
+from execution_gateway.bybit_endpoints import BYBIT_CREATE_ORDER_ENDPOINT, BYBIT_POSITIONS_ENDPOINT
 from execution_gateway.bybit_endpoint import BybitEndpoint
 
 
@@ -100,6 +100,87 @@ class TestImmutability:
         assert BYBIT_CREATE_ORDER_ENDPOINT is C2
 
 
+# ── BYBIT_POSITIONS_ENDPOINT (Hito 3.70) ────────────────────────────────────
+
+class TestPositionsEndpointImport:
+    def test_direct_import(self):
+        from execution_gateway.bybit_endpoints import BYBIT_POSITIONS_ENDPOINT as P
+        assert P is BYBIT_POSITIONS_ENDPOINT
+
+    def test_public_import(self):
+        assert hasattr(execution_gateway, "BYBIT_POSITIONS_ENDPOINT")
+        assert execution_gateway.BYBIT_POSITIONS_ENDPOINT is BYBIT_POSITIONS_ENDPOINT
+
+    def test_in_package_all(self):
+        assert "BYBIT_POSITIONS_ENDPOINT" in execution_gateway.__all__
+
+    def test_in_module_all(self):
+        assert "BYBIT_POSITIONS_ENDPOINT" in bybit_endpoints_module.__all__
+
+    def test_same_object_from_both_imports(self):
+        assert execution_gateway.BYBIT_POSITIONS_ENDPOINT is BYBIT_POSITIONS_ENDPOINT
+
+
+class TestPositionsEndpointTypeAndValue:
+    def test_is_bybit_endpoint(self):
+        assert isinstance(BYBIT_POSITIONS_ENDPOINT, BybitEndpoint)
+
+    def test_method_is_get(self):
+        assert BYBIT_POSITIONS_ENDPOINT.method == "GET"
+
+    def test_path_is_position_list(self):
+        assert BYBIT_POSITIONS_ENDPOINT.path == "/v5/position/list"
+
+    def test_method_exact_string(self):
+        assert BYBIT_POSITIONS_ENDPOINT.method == "GET"
+        assert BYBIT_POSITIONS_ENDPOINT.method != "get"
+        assert BYBIT_POSITIONS_ENDPOINT.method != "Get"
+
+    def test_path_exact_string(self):
+        assert BYBIT_POSITIONS_ENDPOINT.path == "/v5/position/list"
+        assert BYBIT_POSITIONS_ENDPOINT.path != "/v5/position/list/"
+        assert BYBIT_POSITIONS_ENDPOINT.path != "v5/position/list"
+
+    def test_equal_to_equivalent_endpoint(self):
+        equivalent = BybitEndpoint(method="GET", path="/v5/position/list")
+        assert BYBIT_POSITIONS_ENDPOINT == equivalent
+
+    def test_not_equal_to_create_order_endpoint(self):
+        assert BYBIT_POSITIONS_ENDPOINT != BYBIT_CREATE_ORDER_ENDPOINT
+
+    def test_no_url_base(self):
+        assert "bybit.com" not in BYBIT_POSITIONS_ENDPOINT.path
+        assert "https://" not in BYBIT_POSITIONS_ENDPOINT.path
+
+    def test_no_query_string(self):
+        assert "?" not in BYBIT_POSITIONS_ENDPOINT.path
+
+    def test_no_fragment(self):
+        assert "#" not in BYBIT_POSITIONS_ENDPOINT.path
+
+    def test_not_the_create_order_path(self):
+        assert BYBIT_POSITIONS_ENDPOINT.path != BYBIT_CREATE_ORDER_ENDPOINT.path
+
+
+class TestPositionsEndpointImmutability:
+    def test_cannot_modify_method(self):
+        with pytest.raises(Exception):
+            BYBIT_POSITIONS_ENDPOINT.method = "POST"
+
+    def test_cannot_modify_path(self):
+        with pytest.raises(Exception):
+            BYBIT_POSITIONS_ENDPOINT.path = "/v5/order/create"
+
+    def test_is_frozen_dataclass(self):
+        from dataclasses import is_dataclass
+        assert is_dataclass(BYBIT_POSITIONS_ENDPOINT)
+        assert is_dataclass(type(BYBIT_POSITIONS_ENDPOINT))
+
+    def test_same_identity_across_imports(self):
+        from execution_gateway.bybit_endpoints import BYBIT_POSITIONS_ENDPOINT as P2
+        assert BYBIT_POSITIONS_ENDPOINT is P2
+
+
 # ── alcance ────────────────────────────────────────────────────────────────
 
 class TestScope:
@@ -109,9 +190,6 @@ class TestScope:
     def test_no_query_orders_endpoint(self):
         assert not hasattr(bybit_endpoints_module, "BYBIT_QUERY_ORDERS_ENDPOINT")
         assert not hasattr(bybit_endpoints_module, "BYBIT_ORDER_REALTIME_ENDPOINT")
-
-    def test_no_positions_endpoint(self):
-        assert not hasattr(bybit_endpoints_module, "BYBIT_POSITIONS_ENDPOINT")
 
     def test_no_wallet_endpoint(self):
         assert not hasattr(bybit_endpoints_module, "BYBIT_WALLET_ENDPOINT")

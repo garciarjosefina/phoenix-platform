@@ -70,6 +70,24 @@ from execution_gateway.bybit_demo_connectivity_smoke_test import smoke_test_bybi
 from execution_gateway.execution_infrastructure_error import ExecutionInfrastructureError
 from execution_gateway.execution_request_not_supported_error import ExecutionRequestNotSupportedError
 from execution_gateway.bybit_response_processing_error import BybitResponseProcessingError
+from execution_gateway.positions_contracts import ExecutionPosition, PositionsSnapshot
+from execution_gateway.positions_reader import PositionsReader
+from execution_gateway.http_get_transport import HttpGetTransport
+from execution_gateway.urllib_get_http_transport import UrllibGetHttpTransport
+from execution_gateway.http_get_request_executor import HttpGetRequestExecutor
+from execution_gateway.bybit_private_get_request_sender import BybitPrivateGetRequestSender
+from execution_gateway.bybit_private_get_api import BybitPrivateGetApi
+from execution_gateway.bybit_positions_response_interpreter import BybitPositionsResponseInterpreter
+from execution_gateway.bybit_positions_reader import BybitPositionsReader
+from execution_gateway.bybit_endpoints import BYBIT_POSITIONS_ENDPOINT
+from execution_gateway.bybit_demo_positions_reader_factory import create_bybit_demo_positions_reader
+from execution_gateway.configured_bybit_demo_positions_reader_factory import (
+    create_configured_bybit_demo_positions_reader,
+)
+from execution_gateway.bybit_demo_positions_reader_env_bootstrap import (
+    bootstrap_bybit_demo_positions_reader_from_env,
+)
+from execution_gateway.bybit_demo_positions_query import query_bybit_demo_positions
 
 __all__ = [
     "__version__",
@@ -139,4 +157,19 @@ __all__ = [
     "ExecutionInfrastructureError",
     "ExecutionRequestNotSupportedError",
     "BybitResponseProcessingError",
+    "ExecutionPosition",
+    "PositionsSnapshot",
+    "PositionsReader",
+    "HttpGetTransport",
+    "UrllibGetHttpTransport",
+    "HttpGetRequestExecutor",
+    "BybitPrivateGetRequestSender",
+    "BybitPrivateGetApi",
+    "BybitPositionsResponseInterpreter",
+    "BybitPositionsReader",
+    "BYBIT_POSITIONS_ENDPOINT",
+    "create_bybit_demo_positions_reader",
+    "create_configured_bybit_demo_positions_reader",
+    "bootstrap_bybit_demo_positions_reader_from_env",
+    "query_bybit_demo_positions",
 ]

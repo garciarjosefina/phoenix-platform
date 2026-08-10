@@ -5,4 +5,9 @@ BYBIT_CREATE_ORDER_ENDPOINT = BybitEndpoint(
     path="/v5/order/create",
 )
 
-__all__ = ["BYBIT_CREATE_ORDER_ENDPOINT"]
+BYBIT_POSITIONS_ENDPOINT = BybitEndpoint(
+    method="GET",
+    path="/v5/position/list",
+)
+
+__all__ = ["BYBIT_CREATE_ORDER_ENDPOINT", "BYBIT_POSITIONS_ENDPOINT"]
