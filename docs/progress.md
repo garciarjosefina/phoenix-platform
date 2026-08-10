@@ -3,7 +3,7 @@
 ## Estado actual
 
 **Versión:** `v0.1.0` (tag en `main`)
-**Tests:** 4157 passing
+**Tests:** 4478 passing
 **Rama activa:** `main`
 **Última actualización:** 2026-08-07
 
@@ -132,6 +132,10 @@
 ### Hito 3.68 — cerrado
 
 Acción operativa pendiente, fuera del alcance de código: eliminar (o desactivar el autodeploy de) el servicio Railway `phoenix-smoke-demo`, para que un futuro push a `main` no dispare una nueva ejecución contra Bybit Demo.
+
+| Hito | Descripción | Commit |
+|------|-------------|--------|
+| 3.70 | Bybit Demo Positions Read (`ExecutionPosition`/`PositionsSnapshot`, `PositionsReader`) — primera capacidad productiva de lectura de estado real de trading, base de la futura Reconciliation Engine. Diagnóstico previo: la cadena POST existente (`BybitRequestBuilder→HttpRequestExecutor→UrllibHttpTransport`) está hardcodeada a POST y `BybitEndpoint.method` es metadata no consumida (deuda ya documentada en Auditoría C) — se descartó generalizarla (refactor amplio no autorizado) y se construyó una primitiva GET paralela y reutilizable (`HttpGetTransport`/`UrllibGetHttpTransport`/`HttpGetRequestExecutor`/`BybitPrivateGetRequestSender`/`BybitPrivateGetApi`), reutilizando sin duplicar `authenticator`/`header_builder`/`response_parser`/credenciales/recv_window/timeout ya existentes (mismo `BybitDemoExecutionConfig`, sin variables de entorno nuevas). Endpoint oficial Bybit V5 `GET /v5/position/list`, alcance fijado a `category=linear&settleCoin=USDT&limit=200` (sin paginación — deuda documentada, `ADR-002`). Contratos de dominio nuevos, sin ningún tipo Bybit (`symbol`, `side` lowercase, `quantity`/`entry_price`/`leverage`/`unrealized_pnl` en `Decimal`, finitud validada); posiciones de tamaño 0 excluidas del snapshot (no son "una posición"); hedge mode preservado sin colapsar (dos entradas del mismo symbol con side opuesto → dos `ExecutionPosition`, sin necesitar `positionIdx`). `PositionsReader` Protocol nuevo, separado de `ExecutionGateway` — ningún método de lectura se agregó al Port de escritura (`ADR-002`). `BybitPositionsReader` traduce todo fallo (`BybitApiError` para cualquier ret_code, `BybitResponseProcessingError`, `OSError`) a `ExecutionInfrastructureError` ya existente, sin inventar jerarquía nueva — ningún tipo Bybit cruza `query_positions()`, mismo principio que ADR-001A. API pública `query_bybit_demo_positions(*, environ=None) -> PositionsSnapshot`, mismo patrón bootstrap-y-ejecutar que `smoke_test_bybit_demo_connection` (Hito 3.67). 12/12 mutaciones verificadas y detectadas manualmente sobre el código real (GET→POST, endpoint alterado, Demo→Mainnet, tipo Bybit crudo cruzando el Port, quantity a float, side invertido, segunda llamada HTTP, respuesta vacía tratada como error, posiciones de hedge colapsadas, bypass de autenticación, campos requeridos sin validar, import accidental de tipos de creación de orden) — cada mutación restaurada y verificada byte-idéntica contra el original antes de continuar; sin conexión real con Bybit, sin órdenes creadas/canceladas/modificadas, sin tocar Railway ni `PYTHONPATH` — 321 tests nuevos, suite 4157→4478 (+321 tests netos) | `efca21d` |
 
 ### Próximo hito
 
