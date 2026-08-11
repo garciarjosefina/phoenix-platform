@@ -31,8 +31,15 @@ class _SpyUrlBuilder(BybitUrlBuilder):
 
 
 class _SpyPrivateGetApi(BybitPrivateGetApi):
-    def __init__(self, *, result: BybitResponse | None = None, exc: Exception | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        result: BybitResponse | None = None,
+        results: list[BybitResponse] | None = None,
+        exc: Exception | None = None,
+    ) -> None:
         self.calls: list[dict] = []
+        self._results = list(results) if results is not None else None
         self._result = result if result is not None else _SENTINEL_RESPONSE
         self._exc = exc
 
@@ -40,12 +47,21 @@ class _SpyPrivateGetApi(BybitPrivateGetApi):
         self.calls.append({"url": url, "query_string": query_string})
         if self._exc is not None:
             raise self._exc
+        if self._results is not None:
+            return self._results.pop(0)
         return self._result
 
 
 class _SpyInterpreter(BybitPositionsResponseInterpreter):
-    def __init__(self, *, result: PositionsSnapshot | None = None, exc: Exception | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        result: PositionsSnapshot | None = None,
+        results: list[PositionsSnapshot] | None = None,
+        exc: Exception | None = None,
+    ) -> None:
         self.calls: list[dict] = []
+        self._results = list(results) if results is not None else None
         self._result = result if result is not None else _SENTINEL_SNAPSHOT
         self._exc = exc
 
@@ -53,6 +69,8 @@ class _SpyInterpreter(BybitPositionsResponseInterpreter):
         self.calls.append({"response": response})
         if self._exc is not None:
             raise self._exc
+        if self._results is not None:
+            return self._results.pop(0)
         return self._result
 
 
@@ -247,3 +265,78 @@ class TestNoTrading:
         assert not hasattr(module, "ExecutionGateway")
         assert not hasattr(module, "BybitExecutionGateway")
         assert not hasattr(module, "BybitDemoClient")
+
+
+class TestNoCacheAcrossCalls:
+    """IMPORTANT-3 (auditoría Hito 3.70): un futuro Reconciliation Engine
+    probablemente mantendrá vivo un mismo BybitPositionsReader y lo
+    consultará repetidas veces -- cada query_positions() debe volver a
+    golpear el exchange, nunca servir una respuesta guardada."""
+
+    def test_api_called_exactly_twice_on_two_queries(self):
+        api = _SpyPrivateGetApi(results=[_SENTINEL_RESPONSE, _SENTINEL_RESPONSE])
+        reader = _reader(private_get_api=api)
+        reader.query_positions()
+        reader.query_positions()
+        assert len(api.calls) == 2
+
+    def test_interpreter_called_exactly_twice_on_two_queries(self):
+        snap_a = PositionsSnapshot(positions=(), server_time_ms=1)
+        snap_b = PositionsSnapshot(positions=(), server_time_ms=2)
+        interpreter = _SpyInterpreter(results=[snap_a, snap_b])
+        reader = _reader(response_interpreter=interpreter)
+        reader.query_positions()
+        reader.query_positions()
+        assert len(interpreter.calls) == 2
+
+    def test_two_calls_on_same_instance_return_distinct_snapshots_by_identity(self):
+        snap_a = PositionsSnapshot(positions=(), server_time_ms=1)
+        snap_b = PositionsSnapshot(positions=(), server_time_ms=2)
+        interpreter = _SpyInterpreter(results=[snap_a, snap_b])
+        reader = _reader(response_interpreter=interpreter)
+        first = reader.query_positions()
+        second = reader.query_positions()
+        assert first is snap_a
+        assert second is snap_b
+        assert first is not second
+
+    def test_second_snapshot_reflects_second_api_response_end_to_end(self):
+        # Interpreter real (no spy) para verificar que el segundo snapshot
+        # refleja genuinamente la segunda respuesta del exchange, de punta
+        # a punta -- no un valor recordado de la primera llamada.
+        resp1 = BybitResponse(
+            ret_code=0, ret_msg="OK", result={"category": "linear", "list": ()}, ret_ext_info={}, time_ms=111,
+        )
+        resp2 = BybitResponse(
+            ret_code=0, ret_msg="OK", result={"category": "linear", "list": ()}, ret_ext_info={}, time_ms=222,
+        )
+        api = _SpyPrivateGetApi(results=[resp1, resp2])
+        reader = _reader(private_get_api=api, response_interpreter=BybitPositionsResponseInterpreter())
+        first = reader.query_positions()
+        second = reader.query_positions()
+        assert first.server_time_ms == 111
+        assert second.server_time_ms == 222
+
+    def test_reader_instance_has_no_cache_attribute_after_query(self):
+        reader = _reader()
+        reader.query_positions()
+        assert not hasattr(reader, "_cached")
+        assert not hasattr(reader, "_cache")
+        assert not hasattr(reader, "_last_result")
+        assert not hasattr(reader, "_last_snapshot")
+
+    def test_two_independent_reader_instances_do_not_share_state(self):
+        reader_a = _reader()
+        reader_b = _reader()
+        assert reader_a is not reader_b
+        assert vars(reader_a).keys() == {"_private_get_api", "_url_builder", "_response_interpreter"}
+
+    def test_second_query_after_first_failure_still_calls_api_again(self):
+        api = _SpyPrivateGetApi(exc=OSError("down"))
+        reader = _reader(private_get_api=api)
+        with pytest.raises(ExecutionInfrastructureError):
+            reader.query_positions()
+        api._exc = None
+        api._result = _SENTINEL_RESPONSE
+        reader.query_positions()
+        assert len(api.calls) == 2

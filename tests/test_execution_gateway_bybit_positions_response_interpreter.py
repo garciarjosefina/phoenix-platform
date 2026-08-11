@@ -196,6 +196,81 @@ class TestZeroSizePositions:
             _interpret(items=items)
 
 
+class TestAccessoryFields:
+    """IMPORTANT-2 (auditoría Hito 3.70): leverage y unrealisedPnl son
+    accesorios -- Bybit puede devolverlos vacíos/ausentes en respuestas
+    válidas (p.ej. cuentas Unified en portfolio margin). Ausentes o vacíos
+    no deben abortar la fila ni el snapshot; malformados sí siguen
+    fallando cerrado."""
+
+    def test_leverage_empty_string_becomes_none(self):
+        snapshot = _interpret(items=[_item(leverage="")])
+        assert snapshot.positions[0].leverage is None
+
+    def test_unrealised_pnl_empty_string_becomes_none(self):
+        snapshot = _interpret(items=[_item(unrealisedPnl="")])
+        assert snapshot.positions[0].unrealized_pnl is None
+
+    def test_leverage_missing_key_becomes_none(self):
+        item = _item()
+        del item["leverage"]
+        snapshot = _interpret(items=[item])
+        assert snapshot.positions[0].leverage is None
+
+    def test_unrealised_pnl_missing_key_becomes_none(self):
+        item = _item()
+        del item["unrealisedPnl"]
+        snapshot = _interpret(items=[item])
+        assert snapshot.positions[0].unrealized_pnl is None
+
+    def test_essential_fields_still_mapped_when_accessories_empty(self):
+        snapshot = _interpret(items=[_item(leverage="", unrealisedPnl="", symbol="ETHUSDT", side="Sell")])
+        position = snapshot.positions[0]
+        assert position.symbol == "ETHUSDT"
+        assert position.side == "sell"
+        assert position.leverage is None
+        assert position.unrealized_pnl is None
+
+    def test_leverage_present_and_valid_still_becomes_decimal(self):
+        snapshot = _interpret(items=[_item(leverage="25")])
+        assert snapshot.positions[0].leverage == Decimal("25")
+
+    def test_leverage_malformed_non_empty_still_rejected(self):
+        with pytest.raises(BybitResponseProcessingError):
+            _interpret(items=[_item(leverage="not-a-number")])
+
+    def test_unrealised_pnl_malformed_non_empty_still_rejected(self):
+        with pytest.raises(BybitResponseProcessingError):
+            _interpret(items=[_item(unrealisedPnl="not-a-number")])
+
+    def test_leverage_nan_still_rejected_even_though_optional(self):
+        with pytest.raises(BybitResponseProcessingError):
+            _interpret(items=[_item(leverage="nan")])
+
+    def test_one_position_with_empty_accessories_does_not_kill_other_positions(self):
+        items = [
+            _item(symbol="BTCUSDT", leverage="", unrealisedPnl=""),
+            _item(symbol="ETHUSDT", leverage="10", unrealisedPnl="5"),
+        ]
+        snapshot = _interpret(items=items)
+        assert len(snapshot.positions) == 2
+        by_symbol = {p.symbol: p for p in snapshot.positions}
+        assert by_symbol["BTCUSDT"].leverage is None
+        assert by_symbol["ETHUSDT"].leverage == Decimal("10")
+
+    def test_essential_fields_remain_mandatory_symbol(self):
+        item = _item()
+        del item["symbol"]
+        with pytest.raises(BybitResponseProcessingError):
+            _interpret(items=[item])
+
+    def test_essential_fields_remain_mandatory_avg_price(self):
+        item = _item()
+        del item["avgPrice"]
+        with pytest.raises(BybitResponseProcessingError):
+            _interpret(items=[item])
+
+
 class TestNumerics:
     def test_small_quantity_preserved_exactly(self):
         snapshot = _interpret(items=[_item(size="0.00000001")])
@@ -283,18 +358,6 @@ class TestMalformedResponse:
         with pytest.raises(BybitResponseProcessingError):
             _interpret(items=[item])
 
-    def test_leverage_missing(self):
-        item = _item()
-        del item["leverage"]
-        with pytest.raises(BybitResponseProcessingError):
-            _interpret(items=[item])
-
-    def test_unrealised_pnl_missing(self):
-        item = _item()
-        del item["unrealisedPnl"]
-        with pytest.raises(BybitResponseProcessingError):
-            _interpret(items=[item])
-
     def test_side_missing(self):
         item = _item()
         del item["side"]
@@ -325,3 +388,66 @@ class TestPurity:
         snapshot = _interpret(items=[_item()])
         assert not hasattr(snapshot, "result")
         assert not hasattr(snapshot, "raw")
+
+
+class TestPagination:
+    """IMPORTANT-1 (auditoría Hito 3.70): un snapshot truncado servido como
+    si fuera completo es la peor falla posible para reconciliación futura.
+    No se implementa paginación en este hito -- se falla cerrado en su
+    lugar. Cualquier valor truthy de nextPageCursor debe rechazarse."""
+
+    def test_empty_cursor_permitted(self):
+        snapshot = _interpret(result_override={"category": "linear", "list": [], "nextPageCursor": ""})
+        assert snapshot.positions == ()
+
+    def test_missing_cursor_key_permitted(self):
+        # Bybit siempre lo incluye en la práctica, pero la primitive no se
+        # acopla a esa garantía: ausencia se trata igual que cadena vacía.
+        snapshot = _interpret(result_override={"category": "linear", "list": []})
+        assert snapshot.positions == ()
+
+    def test_nonempty_cursor_raises(self):
+        with pytest.raises(BybitResponseProcessingError):
+            _interpret(result_override={"category": "linear", "list": [], "nextPageCursor": "abc%3D%3D"})
+
+    def test_typical_bybit_cursor_value_raises(self):
+        with pytest.raises(BybitResponseProcessingError):
+            _interpret(result_override={
+                "category": "linear", "list": [_item()], "nextPageCursor": "abc%3D%3D",
+            })
+
+    def test_whitespace_cursor_raises(self):
+        # Decisión explícita: cualquier valor truthy -- incluido
+        # whitespace-only -- se trata como señal de paginación pendiente.
+        with pytest.raises(BybitResponseProcessingError):
+            _interpret(result_override={"category": "linear", "list": [], "nextPageCursor": "   "})
+
+    def test_cursor_present_never_returns_partial_snapshot(self):
+        # No debe devolverse ningún PositionsSnapshot -- ni completo ni
+        # parcial -- cuando hay señal de paginación pendiente.
+        error = None
+        try:
+            _interpret(result_override={
+                "category": "linear", "list": [_item()], "nextPageCursor": "abc",
+            })
+        except BybitResponseProcessingError as e:
+            error = e
+        assert error is not None
+
+    def test_cursor_check_triggers_no_second_http_call(self):
+        # El interpreter es puro -- no hace I/O de ningún tipo.
+        import inspect
+        import execution_gateway.bybit_positions_response_interpreter as module
+        src = inspect.getsource(module)
+        assert "urllib" not in src
+        assert "urlopen" not in src
+        assert "request" not in src.lower()
+
+    def test_no_pagination_follow_up_implemented(self):
+        # Se lee nextPageCursor sólo para fallar cerrado -- no se arma un
+        # segundo query string ni se reintenta con el cursor.
+        import inspect
+        import execution_gateway.bybit_positions_response_interpreter as module
+        src = inspect.getsource(module)
+        assert "cursor=" not in src
+        assert "settleCoin" not in src

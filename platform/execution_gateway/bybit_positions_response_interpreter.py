@@ -14,7 +14,10 @@ _PROCESSING_ERROR_MESSAGE = "Bybit response could not be processed"
 # `positionIdx` -- (symbol, side) ya distingue ambas piernas sin colapsarlas.
 _SIDE_FROM_BYBIT = {"Buy": "buy", "Sell": "sell"}
 
-_REQUIRED_FIELDS = ("symbol", "side", "size", "avgPrice", "leverage", "unrealisedPnl")
+# Sólo los campos que identifican y dimensionan la posición son esenciales.
+# leverage/unrealisedPnl son accesorios (IMPORTANT-2, auditoría Hito 3.70):
+# ausentes o vacíos en una respuesta válida no invalidan la fila completa.
+_REQUIRED_FIELDS = ("symbol", "side", "size", "avgPrice")
 
 
 def _to_finite_decimal(value: object) -> Decimal:
@@ -27,6 +30,16 @@ def _to_finite_decimal(value: object) -> Decimal:
     if not parsed.is_finite():
         raise BybitResponseProcessingError(message=_PROCESSING_ERROR_MESSAGE)
     return parsed
+
+
+def _to_optional_finite_decimal(value: object) -> Decimal | None:
+    # Ausente ("None", clave inexistente vía .get()) o cadena vacía se
+    # tratan igual: el exchange no reportó el dato para esta fila. Cualquier
+    # otro valor sigue exigido a ser un Decimal finito válido -- nunca se
+    # acepta en silencio si está malformado.
+    if value is None or value == "":
+        return None
+    return _to_finite_decimal(value)
 
 
 def _interpret_position_item(item: object) -> ExecutionPosition | None:
@@ -54,9 +67,11 @@ def _interpret_position_item(item: object) -> ExecutionPosition | None:
         raise BybitResponseProcessingError(message=_PROCESSING_ERROR_MESSAGE)
     side = _SIDE_FROM_BYBIT[side_raw]
 
+    # avgPrice sigue siendo esencial y obligatorio (ver positions_contracts.py
+    # para el razonamiento de por qué se exige > 0 sin excepción).
     entry_price = _to_finite_decimal(item["avgPrice"])
-    leverage = _to_finite_decimal(item["leverage"])
-    unrealized_pnl = _to_finite_decimal(item["unrealisedPnl"])
+    leverage = _to_optional_finite_decimal(item.get("leverage"))
+    unrealized_pnl = _to_optional_finite_decimal(item.get("unrealisedPnl"))
 
     try:
         return ExecutionPosition(
@@ -87,6 +102,20 @@ class BybitPositionsResponseInterpreter:
             raise BybitResponseProcessingError(message=_PROCESSING_ERROR_MESSAGE)
         raw_list = result["list"]
         if not isinstance(raw_list, tuple):
+            raise BybitResponseProcessingError(message=_PROCESSING_ERROR_MESSAGE)
+
+        # Fail-closed ante paginación (IMPORTANT-1, auditoría Hito 3.70): un
+        # nextPageCursor no vacío significa que Bybit tiene más resultados de
+        # los que esta consulta de página única (limit=200) solicitó. Devolver
+        # el snapshot igual sería mentir por omisión -- nada distinguiría "no
+        # hay más posiciones" de "hay más y no se pidieron". Se prefiere
+        # fallar explícitamente antes que servir un snapshot truncado como si
+        # fuera completo. Ausencia de la clave o cadena vacía se tratan igual:
+        # sin señal de paginación pendiente. Cualquier otro valor truthy --
+        # incluido whitespace -- se trata como señal de paginación pendiente.
+        # No se implementa el follow-up de cursor en este hito (deuda
+        # documentada explícitamente en ADR-002).
+        if result.get("nextPageCursor"):
             raise BybitResponseProcessingError(message=_PROCESSING_ERROR_MESSAGE)
 
         positions = tuple(

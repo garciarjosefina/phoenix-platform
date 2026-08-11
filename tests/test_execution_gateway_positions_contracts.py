@@ -179,6 +179,56 @@ class TestExecutionPositionContract:
         assert _position(symbol="BTCUSDT") != _position(symbol="ETHUSDT")
 
 
+class TestExecutionPositionOptionalAccessoryFields:
+    """IMPORTANT-2 (auditoría Hito 3.70): leverage y unrealized_pnl son
+    accesorios -- Bybit puede devolverlos vacíos en respuestas válidas
+    (p.ej. cuentas Unified en portfolio margin). Deben aceptar None sin
+    dejar de validar cuando sí vienen presentes."""
+
+    def test_leverage_none_is_valid(self):
+        position = _position(leverage=None)
+        assert position.leverage is None
+
+    def test_unrealized_pnl_none_is_valid(self):
+        position = _position(unrealized_pnl=None)
+        assert position.unrealized_pnl is None
+
+    def test_leverage_field_defaults_to_none(self):
+        field = next(f for f in dataclasses.fields(ExecutionPosition) if f.name == "leverage")
+        assert field.default is None
+
+    def test_unrealized_pnl_field_defaults_to_none(self):
+        field = next(f for f in dataclasses.fields(ExecutionPosition) if f.name == "unrealized_pnl")
+        assert field.default is None
+
+    def test_position_constructible_without_accessory_fields(self):
+        position = ExecutionPosition(
+            symbol="BTCUSDT", side="buy", quantity=Decimal("1"), entry_price=Decimal("100"),
+        )
+        assert position.leverage is None
+        assert position.unrealized_pnl is None
+
+    def test_leverage_still_validated_when_present(self):
+        with pytest.raises(TypeError, match="leverage must be Decimal or None"):
+            _position(leverage=10)
+
+    def test_leverage_still_rejects_non_positive_when_present(self):
+        with pytest.raises(ValueError, match="leverage must be > 0"):
+            _position(leverage=Decimal("0"))
+
+    def test_unrealized_pnl_still_validated_when_present(self):
+        with pytest.raises(TypeError, match="unrealized_pnl must be Decimal or None"):
+            _position(unrealized_pnl=1.0)
+
+    def test_symbol_side_quantity_entry_price_remain_mandatory(self):
+        with pytest.raises(TypeError):
+            ExecutionPosition(side="buy", quantity=Decimal("1"), entry_price=Decimal("100"))
+
+    def test_entry_price_still_must_be_positive(self):
+        with pytest.raises(ValueError, match="entry_price must be > 0"):
+            _position(entry_price=Decimal("0"))
+
+
 # ── PositionsSnapshot ────────────────────────────────────────────────────
 
 class TestPositionsSnapshotContract:

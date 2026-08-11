@@ -10,8 +10,14 @@ class ExecutionPosition:
     side: str
     quantity: Decimal
     entry_price: Decimal
-    leverage: Decimal
-    unrealized_pnl: Decimal
+    # leverage/unrealized_pnl son accesorios, no identidad de la posición
+    # (auditoría Hito 3.70, IMPORTANT-2): Bybit puede devolverlos vacíos en
+    # respuestas válidas (p.ej. cuentas Unified en portfolio margin) -- una
+    # posición real sigue siendo observable sin ellos. None cuando el
+    # exchange no los reporta; si vienen presentes, se siguen validando
+    # igual que antes.
+    leverage: Decimal | None = None
+    unrealized_pnl: Decimal | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.symbol, str):
@@ -31,6 +37,12 @@ class ExecutionPosition:
         if self.quantity <= 0:
             raise ValueError(f"quantity must be > 0, got: {self.quantity}")
 
+        # entry_price sigue siendo obligatorio y > 0: por construcción sólo
+        # se evalúa para posiciones con quantity > 0 ya confirmada (el
+        # interpreter descarta antes las filas de tamaño 0) -- Bybit no
+        # documenta ningún caso en que una posición realmente abierta tenga
+        # un precio promedio de entrada no positivo (evaluado explícitamente,
+        # auditoría Hito 3.70, IMPORTANT-2).
         if not isinstance(self.entry_price, Decimal):
             raise TypeError(f"entry_price must be Decimal, got: {type(self.entry_price).__name__}")
         if not self.entry_price.is_finite():
@@ -38,19 +50,21 @@ class ExecutionPosition:
         if self.entry_price <= 0:
             raise ValueError(f"entry_price must be > 0, got: {self.entry_price}")
 
-        if not isinstance(self.leverage, Decimal):
-            raise TypeError(f"leverage must be Decimal, got: {type(self.leverage).__name__}")
-        if not self.leverage.is_finite():
-            raise ValueError("leverage must be finite")
-        if self.leverage <= 0:
-            raise ValueError(f"leverage must be > 0, got: {self.leverage}")
+        if self.leverage is not None:
+            if not isinstance(self.leverage, Decimal):
+                raise TypeError(f"leverage must be Decimal or None, got: {type(self.leverage).__name__}")
+            if not self.leverage.is_finite():
+                raise ValueError("leverage must be finite")
+            if self.leverage <= 0:
+                raise ValueError(f"leverage must be > 0, got: {self.leverage}")
 
-        if not isinstance(self.unrealized_pnl, Decimal):
-            raise TypeError(
-                f"unrealized_pnl must be Decimal, got: {type(self.unrealized_pnl).__name__}"
-            )
-        if not self.unrealized_pnl.is_finite():
-            raise ValueError("unrealized_pnl must be finite")
+        if self.unrealized_pnl is not None:
+            if not isinstance(self.unrealized_pnl, Decimal):
+                raise TypeError(
+                    f"unrealized_pnl must be Decimal or None, got: {type(self.unrealized_pnl).__name__}"
+                )
+            if not self.unrealized_pnl.is_finite():
+                raise ValueError("unrealized_pnl must be finite")
 
 
 @dataclass(frozen=True)
