@@ -154,3 +154,64 @@ class TestBehavior:
         _install_fake_urlopen(monkeypatch, capture=calls)
         UrllibGetHttpTransport().get(url="https://x", headers={}, timeout_seconds=1)
         assert len(calls) == 1
+
+
+class TestResponseClose:
+    """Deuda MENOR conocida desde el Hito 3.70 (cierre de Response sin test
+    dedicado), cerrada en el Hito 3.72 al sumar un tercer consumidor
+    periódico de este transporte compartido. Producción ya usa
+    `with urllib.request.urlopen(...) as response:` correctamente -- este
+    test convierte el mutante "eliminar el context manager" de superviviente
+    a detectado, sin cambiar código de producción."""
+
+    def test_response_used_as_context_manager(self, monkeypatch):
+        entered = []
+        exited = []
+
+        class _TrackedResponse:
+            def __init__(self, body: bytes):
+                self._body = body
+
+            def read(self):
+                return self._body
+
+            def __enter__(self):
+                entered.append(1)
+                return self
+
+            def __exit__(self, *a):
+                exited.append(1)
+                return False
+
+        def fake(req, timeout=None):
+            return _TrackedResponse(b'{"ok":true}')
+
+        monkeypatch.setattr(urllib.request, "urlopen", fake)
+        UrllibGetHttpTransport().get(url="https://x", headers={}, timeout_seconds=1)
+
+        assert entered == [1]
+        assert exited == [1]
+
+    def test_response_exited_even_when_body_read_succeeds_before_return(self, monkeypatch):
+        # El cierre debe ocurrir como parte del mismo `with`, no en un paso
+        # posterior separable -- se verifica el orden: __exit__ ya ocurrió
+        # para cuando `get()` retorna.
+        exited = []
+
+        class _TrackedResponse:
+            def __init__(self, body: bytes):
+                self._body = body
+
+            def read(self):
+                return self._body
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                exited.append(1)
+                return False
+
+        monkeypatch.setattr(urllib.request, "urlopen", lambda req, timeout=None: _TrackedResponse(b"{}"))
+        UrllibGetHttpTransport().get(url="https://x", headers={}, timeout_seconds=1)
+        assert exited == [1]

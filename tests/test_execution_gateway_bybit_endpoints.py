@@ -5,6 +5,7 @@ from execution_gateway.bybit_endpoints import (
     BYBIT_CREATE_ORDER_ENDPOINT,
     BYBIT_OPEN_ORDERS_ENDPOINT,
     BYBIT_POSITIONS_ENDPOINT,
+    BYBIT_WALLET_BALANCE_ENDPOINT,
 )
 from execution_gateway.bybit_endpoint import BybitEndpoint
 
@@ -254,6 +255,78 @@ class TestOpenOrdersEndpointImmutability:
         assert BYBIT_OPEN_ORDERS_ENDPOINT is O2
 
 
+# ── BYBIT_WALLET_BALANCE_ENDPOINT (Hito 3.72) ───────────────────────────────
+
+class TestWalletBalanceEndpointImport:
+    def test_direct_import(self):
+        from execution_gateway.bybit_endpoints import BYBIT_WALLET_BALANCE_ENDPOINT as W
+        assert W is BYBIT_WALLET_BALANCE_ENDPOINT
+
+    def test_public_import(self):
+        assert hasattr(execution_gateway, "BYBIT_WALLET_BALANCE_ENDPOINT")
+        assert execution_gateway.BYBIT_WALLET_BALANCE_ENDPOINT is BYBIT_WALLET_BALANCE_ENDPOINT
+
+    def test_in_package_all(self):
+        assert "BYBIT_WALLET_BALANCE_ENDPOINT" in execution_gateway.__all__
+
+    def test_in_module_all(self):
+        assert "BYBIT_WALLET_BALANCE_ENDPOINT" in bybit_endpoints_module.__all__
+
+
+class TestWalletBalanceEndpointTypeAndValue:
+    def test_is_bybit_endpoint(self):
+        assert isinstance(BYBIT_WALLET_BALANCE_ENDPOINT, BybitEndpoint)
+
+    def test_method_is_get(self):
+        assert BYBIT_WALLET_BALANCE_ENDPOINT.method == "GET"
+
+    def test_path_is_account_wallet_balance(self):
+        assert BYBIT_WALLET_BALANCE_ENDPOINT.path == "/v5/account/wallet-balance"
+
+    def test_path_exact_string(self):
+        assert BYBIT_WALLET_BALANCE_ENDPOINT.path != "/v5/account/wallet-balance/"
+        assert BYBIT_WALLET_BALANCE_ENDPOINT.path != "v5/account/wallet-balance"
+
+    def test_equal_to_equivalent_endpoint(self):
+        equivalent = BybitEndpoint(method="GET", path="/v5/account/wallet-balance")
+        assert BYBIT_WALLET_BALANCE_ENDPOINT == equivalent
+
+    def test_not_the_create_order_endpoint(self):
+        assert BYBIT_WALLET_BALANCE_ENDPOINT != BYBIT_CREATE_ORDER_ENDPOINT
+        assert BYBIT_WALLET_BALANCE_ENDPOINT.path != BYBIT_CREATE_ORDER_ENDPOINT.path
+
+    def test_not_the_positions_endpoint(self):
+        assert BYBIT_WALLET_BALANCE_ENDPOINT != BYBIT_POSITIONS_ENDPOINT
+
+    def test_not_the_open_orders_endpoint(self):
+        assert BYBIT_WALLET_BALANCE_ENDPOINT != BYBIT_OPEN_ORDERS_ENDPOINT
+
+    def test_no_url_base(self):
+        assert "bybit.com" not in BYBIT_WALLET_BALANCE_ENDPOINT.path
+        assert "https://" not in BYBIT_WALLET_BALANCE_ENDPOINT.path
+
+    def test_no_query_string(self):
+        assert "?" not in BYBIT_WALLET_BALANCE_ENDPOINT.path
+
+
+class TestWalletBalanceEndpointImmutability:
+    def test_cannot_modify_method(self):
+        with pytest.raises(Exception):
+            BYBIT_WALLET_BALANCE_ENDPOINT.method = "POST"
+
+    def test_cannot_modify_path(self):
+        with pytest.raises(Exception):
+            BYBIT_WALLET_BALANCE_ENDPOINT.path = "/v5/order/create"
+
+    def test_is_frozen_dataclass(self):
+        from dataclasses import is_dataclass
+        assert is_dataclass(BYBIT_WALLET_BALANCE_ENDPOINT)
+
+    def test_same_identity_across_imports(self):
+        from execution_gateway.bybit_endpoints import BYBIT_WALLET_BALANCE_ENDPOINT as W2
+        assert BYBIT_WALLET_BALANCE_ENDPOINT is W2
+
+
 # ── alcance ────────────────────────────────────────────────────────────────
 
 class TestScope:
@@ -267,7 +340,10 @@ class TestScope:
         assert not hasattr(bybit_endpoints_module, "BYBIT_QUERY_ORDERS_ENDPOINT")
         assert not hasattr(bybit_endpoints_module, "BYBIT_ORDER_REALTIME_ENDPOINT")
 
-    def test_no_wallet_endpoint(self):
+    def test_no_wallet_endpoint_under_the_hypothetical_name(self):
+        # BYBIT_WALLET_ENDPOINT nunca se creó bajo ese nombre --
+        # /v5/account/wallet-balance existe desde el Hito 3.72 como
+        # BYBIT_WALLET_BALANCE_ENDPOINT (cobertura dedicada más abajo).
         assert not hasattr(bybit_endpoints_module, "BYBIT_WALLET_ENDPOINT")
 
     def test_no_endpoint_collection(self):

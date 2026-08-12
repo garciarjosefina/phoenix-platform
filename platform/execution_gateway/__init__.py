@@ -101,6 +101,23 @@ from execution_gateway.bybit_demo_open_orders_reader_env_bootstrap import (
     bootstrap_bybit_demo_open_orders_reader_from_env,
 )
 from execution_gateway.bybit_demo_open_orders_query import query_bybit_demo_open_orders
+from execution_gateway.wallet_balance_contracts import ExecutionCurrencyBalance, WalletBalanceSnapshot
+from execution_gateway.wallet_balance_reader import WalletBalanceReader
+from execution_gateway.bybit_wallet_balance_response_interpreter import (
+    BybitWalletBalanceResponseInterpreter,
+)
+from execution_gateway.bybit_wallet_balance_reader import BybitWalletBalanceReader
+from execution_gateway.bybit_endpoints import BYBIT_WALLET_BALANCE_ENDPOINT
+from execution_gateway.bybit_demo_wallet_balance_reader_factory import (
+    create_bybit_demo_wallet_balance_reader,
+)
+from execution_gateway.configured_bybit_demo_wallet_balance_reader_factory import (
+    create_configured_bybit_demo_wallet_balance_reader,
+)
+from execution_gateway.bybit_demo_wallet_balance_reader_env_bootstrap import (
+    bootstrap_bybit_demo_wallet_balance_reader_from_env,
+)
+from execution_gateway.bybit_demo_wallet_balance_query import query_bybit_demo_wallet_balance
 
 __all__ = [
     "__version__",
@@ -195,4 +212,14 @@ __all__ = [
     "create_configured_bybit_demo_open_orders_reader",
     "bootstrap_bybit_demo_open_orders_reader_from_env",
     "query_bybit_demo_open_orders",
+    "ExecutionCurrencyBalance",
+    "WalletBalanceSnapshot",
+    "WalletBalanceReader",
+    "BybitWalletBalanceResponseInterpreter",
+    "BybitWalletBalanceReader",
+    "BYBIT_WALLET_BALANCE_ENDPOINT",
+    "create_bybit_demo_wallet_balance_reader",
+    "create_configured_bybit_demo_wallet_balance_reader",
+    "bootstrap_bybit_demo_wallet_balance_reader_from_env",
+    "query_bybit_demo_wallet_balance",
 ]
