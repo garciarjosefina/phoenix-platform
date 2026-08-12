@@ -10,7 +10,16 @@ _PROCESSING_ERROR_MESSAGE = "Bybit response could not be processed"
 
 _SIDE_FROM_BYBIT = {"Buy": "buy", "Sell": "sell"}
 _ORDER_TYPE_FROM_BYBIT = {"Market": "market", "Limit": "limit"}
-_STATUS_FROM_BYBIT = {"New": "new", "PartiallyFilled": "partially_filled", "Untriggered": "untriggered"}
+# "Triggered" agregado tras la auditoría del Hito 3.71 (IMPORTANT-2): estado
+# transitorio legítimo de una orden condicional (Untriggered -> Triggered ->
+# New), observable en una carrera de lectura real. Ver _VALID_STATUSES en
+# open_orders_contracts.py para el razonamiento completo.
+_STATUS_FROM_BYBIT = {
+    "New": "new",
+    "PartiallyFilled": "partially_filled",
+    "Untriggered": "untriggered",
+    "Triggered": "triggered",
+}
 
 # orderLinkId y price se leen aparte vía .get() -- son opcionales (ver
 # positions_contracts.py/ADR-002 para el mismo patrón aplicado a leverage/
@@ -30,10 +39,21 @@ def _to_finite_decimal(value: object) -> Decimal:
     return parsed
 
 
-def _to_optional_finite_decimal(value: object) -> Decimal | None:
+def _to_optional_price_decimal(value: object) -> Decimal | None:
+    # Específico de price -- no un patrón genérico reutilizable para
+    # cualquier campo opcional. "" o ausente significan "sin precio
+    # preestablecido"; "0" (comparado por valor tras parsear, cubre "0",
+    # "0.0", "0.00", etc.) también, confirmado como respuesta legítima real
+    # de Bybit para market orders, no sólo "" (IMPORTANT-1, auditoría del
+    # Hito 3.71). No confundir con otros campos opcionales donde 0 sí es un
+    # valor real y distinto de ausencia (p.ej. unrealisedPnl en Positions
+    # Read, Hito 3.70) -- ese caso usa su propio helper, sin este atajo.
     if value is None or value == "":
         return None
-    return _to_finite_decimal(value)
+    parsed = _to_finite_decimal(value)
+    if parsed == 0:
+        return None
+    return parsed
 
 
 def _to_optional_non_empty_str(value: object) -> str | None:
@@ -84,11 +104,8 @@ def _interpret_order_item(item: object) -> ExecutionOpenOrder:
 
     quantity = _to_finite_decimal(item["qty"])
     filled_quantity = _to_finite_decimal(item["cumExecQty"])
-    # price ausente/"" se trata como None (legítimo para market orders --
-    # se asume que Bybit representa "sin precio preestablecido" como cadena
-    # vacía, consistente con el resto de la API V5; no confirmado contra
-    # una respuesta real de un market order en este hito).
-    price = _to_optional_finite_decimal(item.get("price"))
+    # price ausente/""/"0" se trata como None -- ver _to_optional_price_decimal.
+    price = _to_optional_price_decimal(item.get("price"))
 
     try:
         return ExecutionOpenOrder(

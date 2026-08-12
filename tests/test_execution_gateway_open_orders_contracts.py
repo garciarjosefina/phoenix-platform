@@ -208,6 +208,12 @@ class TestExecutionOpenOrderContract:
     def test_status_accepts_untriggered(self):
         assert _order(status="untriggered").status == "untriggered"
 
+    def test_status_accepts_triggered(self):
+        # IMPORTANT-2 (auditoría del Hito 3.71): estado transitorio
+        # legítimo de una orden condicional (Untriggered -> Triggered ->
+        # New), observable en una carrera de lectura real.
+        assert _order(status="triggered").status == "triggered"
+
     def test_status_rejects_capitalized_bybit_vocabulary(self):
         with pytest.raises(ValueError, match="status must be one of"):
             _order(status="New")

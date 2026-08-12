@@ -6,10 +6,15 @@ _VALID_ORDER_TYPES = {"market", "limit"}
 
 # /v5/order/realtime sólo devuelve órdenes no terminales (a diferencia de
 # /v5/order/history, que no se usa en este hito). El universo posible de
-# orderStatus para ese endpoint está acotado a estos tres -- cualquier otro
+# orderStatus para ese endpoint está acotado a estos cuatro -- cualquier otro
 # valor sería inesperado para este scope de lectura y se rechaza en la
 # interpretación en lugar de mapearse a un estado que perdería información.
-_VALID_STATUSES = {"new", "partially_filled", "untriggered"}
+# "triggered" se agregó tras la auditoría del Hito 3.71 (IMPORTANT-2):
+# es el estado transitorio legítimo de una orden condicional en la
+# transición Untriggered -> Triggered -> New, observable en una carrera de
+# lectura real. No se agregan estados terminales (Filled/Cancelled/
+# Rejected) -- esos siguen fuera del scope de este endpoint de lectura.
+_VALID_STATUSES = {"new", "partially_filled", "untriggered", "triggered"}
 
 
 @dataclass(frozen=True)
@@ -30,8 +35,10 @@ class ExecutionOpenOrder:
     # huérfana. exchange_order_id (orderId de Bybit) siempre está presente:
     # es el identificador que el propio exchange asigna a toda orden real.
     order_id: str | None = None
-    # price ausente/vacío es legítimo para market orders (Bybit no siempre
-    # reporta un precio preestablecido) -- ver bybit_open_orders_response_interpreter.py.
+    # price ausente/vacío/cero es legítimo para market orders (Bybit no
+    # siempre reporta un precio preestablecido; "0" confirmado como
+    # respuesta legítima real, no sólo ""  -- IMPORTANT-1, auditoría del
+    # Hito 3.71) -- ver bybit_open_orders_response_interpreter.py.
     price: Decimal | None = None
 
     def __post_init__(self) -> None:

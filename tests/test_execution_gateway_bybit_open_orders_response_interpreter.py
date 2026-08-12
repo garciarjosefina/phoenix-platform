@@ -167,6 +167,64 @@ class TestOrderTypes:
             _interpret(items=[_item(orderType="Conditional")])
 
 
+class TestPriceSemantics:
+    """IMPORTANT-1 (auditoría del Hito 3.71): price="0" es una respuesta
+    legítima real de Bybit para market orders, no sólo price="" -- ambas
+    representan "sin precio preestablecido", nunca deben abortar el
+    snapshot."""
+
+    def test_market_empty_string_becomes_none(self):
+        snapshot = _interpret(items=[_item(orderType="Market", price="")])
+        assert snapshot.orders[0].price is None
+
+    def test_market_zero_becomes_none(self):
+        snapshot = _interpret(items=[_item(orderType="Market", price="0")])
+        assert snapshot.orders[0].price is None
+
+    def test_market_zero_point_zero_becomes_none(self):
+        # Comparado por valor tras parsear, no por texto -- "0.0" es
+        # equivalente a "0" para esta semántica.
+        snapshot = _interpret(items=[_item(orderType="Market", price="0.00")])
+        assert snapshot.orders[0].price is None
+
+    def test_market_missing_key_becomes_none(self):
+        item = _item(orderType="Market")
+        del item["price"]
+        snapshot = _interpret(items=[item])
+        assert snapshot.orders[0].price is None
+
+    def test_limit_valid_price_becomes_decimal(self):
+        snapshot = _interpret(items=[_item(orderType="Limit", price="60000.5")])
+        assert snapshot.orders[0].price == Decimal("60000.5")
+
+    def test_negative_price_rejected(self):
+        with pytest.raises(BybitResponseProcessingError):
+            _interpret(items=[_item(price="-1")])
+
+    def test_malformed_price_rejected(self):
+        with pytest.raises(BybitResponseProcessingError):
+            _interpret(items=[_item(price="abc")])
+
+    def test_nan_price_rejected(self):
+        with pytest.raises(BybitResponseProcessingError):
+            _interpret(items=[_item(price="nan")])
+
+    def test_infinity_price_rejected(self):
+        with pytest.raises(BybitResponseProcessingError):
+            _interpret(items=[_item(price="inf")])
+
+    def test_market_zero_price_among_valid_orders_does_not_abort_snapshot(self):
+        items = [
+            _item(orderId="1", orderType="Market", price="0"),
+            _item(orderId="2", orderType="Limit", price="60000"),
+        ]
+        snapshot = _interpret(items=items)
+        assert len(snapshot.orders) == 2
+        by_id = {o.exchange_order_id: o for o in snapshot.orders}
+        assert by_id["1"].price is None
+        assert by_id["2"].price == Decimal("60000")
+
+
 class TestPartialFill:
     def test_new_order_zero_filled(self):
         snapshot = _interpret(items=[_item(orderStatus="New", cumExecQty="0")])
@@ -201,6 +259,53 @@ class TestPartialFill:
     def test_status_cancelled_rejected(self):
         with pytest.raises(BybitResponseProcessingError):
             _interpret(items=[_item(orderStatus="Cancelled")])
+
+
+class TestStatusSemantics:
+    """IMPORTANT-2 (auditoría del Hito 3.71): "Triggered" es el estado
+    transitorio legítimo de una orden condicional en la transición
+    Untriggered -> Triggered -> New, observable en una carrera de lectura
+    real -- no debe abortar el snapshot ni colapsarse silenciosamente a
+    otro estado."""
+
+    def test_new_maps_to_new(self):
+        snapshot = _interpret(items=[_item(orderStatus="New")])
+        assert snapshot.orders[0].status == "new"
+
+    def test_partially_filled_maps_to_partially_filled(self):
+        snapshot = _interpret(items=[_item(orderStatus="PartiallyFilled")])
+        assert snapshot.orders[0].status == "partially_filled"
+
+    def test_untriggered_maps_to_untriggered(self):
+        snapshot = _interpret(items=[_item(orderStatus="Untriggered")])
+        assert snapshot.orders[0].status == "untriggered"
+
+    def test_triggered_maps_to_triggered(self):
+        snapshot = _interpret(items=[_item(orderStatus="Triggered")])
+        assert snapshot.orders[0].status == "triggered"
+
+    def test_triggered_not_collapsed_to_new(self):
+        snapshot = _interpret(items=[_item(orderStatus="Triggered")])
+        assert snapshot.orders[0].status != "new"
+
+    def test_illegitimate_terminal_status_still_rejected(self):
+        with pytest.raises(BybitResponseProcessingError):
+            _interpret(items=[_item(orderStatus="Deactivated")])
+
+    def test_unknown_status_rejected(self):
+        with pytest.raises(BybitResponseProcessingError):
+            _interpret(items=[_item(orderStatus="SomethingElse")])
+
+    def test_triggered_order_among_valid_orders_does_not_abort_snapshot(self):
+        items = [
+            _item(orderId="1", orderStatus="Triggered"),
+            _item(orderId="2", orderStatus="New"),
+        ]
+        snapshot = _interpret(items=items)
+        assert len(snapshot.orders) == 2
+        by_id = {o.exchange_order_id: o for o in snapshot.orders}
+        assert by_id["1"].status == "triggered"
+        assert by_id["2"].status == "new"
 
 
 class TestReduceOnly:
