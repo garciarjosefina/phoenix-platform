@@ -118,6 +118,27 @@ from execution_gateway.bybit_demo_wallet_balance_reader_env_bootstrap import (
     bootstrap_bybit_demo_wallet_balance_reader_from_env,
 )
 from execution_gateway.bybit_demo_wallet_balance_query import query_bybit_demo_wallet_balance
+from execution_gateway.instrument_metadata_contracts import ExecutionInstrumentMetadata
+from execution_gateway.instrument_metadata_reader import InstrumentMetadataReader
+from execution_gateway.bybit_public_get_request_sender import BybitPublicGetRequestSender
+from execution_gateway.bybit_public_get_api import BybitPublicGetApi
+from execution_gateway.bybit_instrument_metadata_response_interpreter import (
+    BybitInstrumentMetadataResponseInterpreter,
+)
+from execution_gateway.bybit_instrument_metadata_reader import BybitInstrumentMetadataReader
+from execution_gateway.bybit_endpoints import BYBIT_INSTRUMENTS_INFO_ENDPOINT
+from execution_gateway.bybit_demo_instrument_metadata_reader_factory import (
+    create_bybit_demo_instrument_metadata_reader,
+)
+from execution_gateway.configured_bybit_demo_instrument_metadata_reader_factory import (
+    create_configured_bybit_demo_instrument_metadata_reader,
+)
+from execution_gateway.bybit_demo_instrument_metadata_reader_env_bootstrap import (
+    bootstrap_bybit_demo_instrument_metadata_reader_from_env,
+)
+from execution_gateway.bybit_demo_instrument_metadata_query import (
+    query_bybit_demo_instrument_metadata,
+)
 
 __all__ = [
     "__version__",
@@ -222,4 +243,15 @@ __all__ = [
     "create_configured_bybit_demo_wallet_balance_reader",
     "bootstrap_bybit_demo_wallet_balance_reader_from_env",
     "query_bybit_demo_wallet_balance",
+    "ExecutionInstrumentMetadata",
+    "InstrumentMetadataReader",
+    "BybitPublicGetRequestSender",
+    "BybitPublicGetApi",
+    "BybitInstrumentMetadataResponseInterpreter",
+    "BybitInstrumentMetadataReader",
+    "BYBIT_INSTRUMENTS_INFO_ENDPOINT",
+    "create_bybit_demo_instrument_metadata_reader",
+    "create_configured_bybit_demo_instrument_metadata_reader",
+    "bootstrap_bybit_demo_instrument_metadata_reader_from_env",
+    "query_bybit_demo_instrument_metadata",
 ]

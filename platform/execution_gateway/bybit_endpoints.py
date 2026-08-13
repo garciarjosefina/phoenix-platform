@@ -20,9 +20,15 @@ BYBIT_WALLET_BALANCE_ENDPOINT = BybitEndpoint(
     path="/v5/account/wallet-balance",
 )
 
+BYBIT_INSTRUMENTS_INFO_ENDPOINT = BybitEndpoint(
+    method="GET",
+    path="/v5/market/instruments-info",
+)
+
 __all__ = [
     "BYBIT_CREATE_ORDER_ENDPOINT",
     "BYBIT_POSITIONS_ENDPOINT",
     "BYBIT_OPEN_ORDERS_ENDPOINT",
     "BYBIT_WALLET_BALANCE_ENDPOINT",
+    "BYBIT_INSTRUMENTS_INFO_ENDPOINT",
 ]

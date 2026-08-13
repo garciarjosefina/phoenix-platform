@@ -6,6 +6,7 @@ from execution_gateway.bybit_endpoints import (
     BYBIT_OPEN_ORDERS_ENDPOINT,
     BYBIT_POSITIONS_ENDPOINT,
     BYBIT_WALLET_BALANCE_ENDPOINT,
+    BYBIT_INSTRUMENTS_INFO_ENDPOINT,
 )
 from execution_gateway.bybit_endpoint import BybitEndpoint
 
@@ -327,6 +328,81 @@ class TestWalletBalanceEndpointImmutability:
         assert BYBIT_WALLET_BALANCE_ENDPOINT is W2
 
 
+# ── BYBIT_INSTRUMENTS_INFO_ENDPOINT (Hito 3.73) ─────────────────────────────
+
+class TestInstrumentsInfoEndpointImport:
+    def test_direct_import(self):
+        from execution_gateway.bybit_endpoints import BYBIT_INSTRUMENTS_INFO_ENDPOINT as I
+        assert I is BYBIT_INSTRUMENTS_INFO_ENDPOINT
+
+    def test_public_import(self):
+        assert hasattr(execution_gateway, "BYBIT_INSTRUMENTS_INFO_ENDPOINT")
+        assert execution_gateway.BYBIT_INSTRUMENTS_INFO_ENDPOINT is BYBIT_INSTRUMENTS_INFO_ENDPOINT
+
+    def test_in_package_all(self):
+        assert "BYBIT_INSTRUMENTS_INFO_ENDPOINT" in execution_gateway.__all__
+
+    def test_in_module_all(self):
+        assert "BYBIT_INSTRUMENTS_INFO_ENDPOINT" in bybit_endpoints_module.__all__
+
+
+class TestInstrumentsInfoEndpointTypeAndValue:
+    def test_is_bybit_endpoint(self):
+        assert isinstance(BYBIT_INSTRUMENTS_INFO_ENDPOINT, BybitEndpoint)
+
+    def test_method_is_get(self):
+        assert BYBIT_INSTRUMENTS_INFO_ENDPOINT.method == "GET"
+
+    def test_path_is_market_instruments_info(self):
+        assert BYBIT_INSTRUMENTS_INFO_ENDPOINT.path == "/v5/market/instruments-info"
+
+    def test_path_exact_string(self):
+        assert BYBIT_INSTRUMENTS_INFO_ENDPOINT.path != "/v5/market/instruments-info/"
+        assert BYBIT_INSTRUMENTS_INFO_ENDPOINT.path != "v5/market/instruments-info"
+
+    def test_equal_to_equivalent_endpoint(self):
+        equivalent = BybitEndpoint(method="GET", path="/v5/market/instruments-info")
+        assert BYBIT_INSTRUMENTS_INFO_ENDPOINT == equivalent
+
+    def test_not_the_create_order_endpoint(self):
+        assert BYBIT_INSTRUMENTS_INFO_ENDPOINT != BYBIT_CREATE_ORDER_ENDPOINT
+        assert BYBIT_INSTRUMENTS_INFO_ENDPOINT.path != BYBIT_CREATE_ORDER_ENDPOINT.path
+
+    def test_not_the_positions_endpoint(self):
+        assert BYBIT_INSTRUMENTS_INFO_ENDPOINT != BYBIT_POSITIONS_ENDPOINT
+
+    def test_not_the_open_orders_endpoint(self):
+        assert BYBIT_INSTRUMENTS_INFO_ENDPOINT != BYBIT_OPEN_ORDERS_ENDPOINT
+
+    def test_not_the_wallet_balance_endpoint(self):
+        assert BYBIT_INSTRUMENTS_INFO_ENDPOINT != BYBIT_WALLET_BALANCE_ENDPOINT
+
+    def test_no_url_base(self):
+        assert "bybit.com" not in BYBIT_INSTRUMENTS_INFO_ENDPOINT.path
+        assert "https://" not in BYBIT_INSTRUMENTS_INFO_ENDPOINT.path
+
+    def test_no_query_string(self):
+        assert "?" not in BYBIT_INSTRUMENTS_INFO_ENDPOINT.path
+
+
+class TestInstrumentsInfoEndpointImmutability:
+    def test_cannot_modify_method(self):
+        with pytest.raises(Exception):
+            BYBIT_INSTRUMENTS_INFO_ENDPOINT.method = "POST"
+
+    def test_cannot_modify_path(self):
+        with pytest.raises(Exception):
+            BYBIT_INSTRUMENTS_INFO_ENDPOINT.path = "/v5/order/create"
+
+    def test_is_frozen_dataclass(self):
+        from dataclasses import is_dataclass
+        assert is_dataclass(BYBIT_INSTRUMENTS_INFO_ENDPOINT)
+
+    def test_same_identity_across_imports(self):
+        from execution_gateway.bybit_endpoints import BYBIT_INSTRUMENTS_INFO_ENDPOINT as I2
+        assert BYBIT_INSTRUMENTS_INFO_ENDPOINT is I2
+
+
 # ── alcance ────────────────────────────────────────────────────────────────
 
 class TestScope:
@@ -345,6 +421,14 @@ class TestScope:
         # /v5/account/wallet-balance existe desde el Hito 3.72 como
         # BYBIT_WALLET_BALANCE_ENDPOINT (cobertura dedicada más abajo).
         assert not hasattr(bybit_endpoints_module, "BYBIT_WALLET_ENDPOINT")
+
+    def test_no_instrument_endpoint_under_the_hypothetical_name(self):
+        # BYBIT_INSTRUMENT_ENDPOINT/BYBIT_INSTRUMENTS_ENDPOINT nunca se
+        # crearon bajo esos nombres -- /v5/market/instruments-info existe
+        # desde el Hito 3.73 como BYBIT_INSTRUMENTS_INFO_ENDPOINT (cobertura
+        # dedicada más abajo).
+        assert not hasattr(bybit_endpoints_module, "BYBIT_INSTRUMENT_ENDPOINT")
+        assert not hasattr(bybit_endpoints_module, "BYBIT_INSTRUMENTS_ENDPOINT")
 
     def test_no_endpoint_collection(self):
         assert not hasattr(bybit_endpoints_module, "ENDPOINTS")
