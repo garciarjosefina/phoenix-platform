@@ -133,6 +133,20 @@ class TestExecutionCurrencyBalanceContract:
         balance = _balance(unrealized_pnl=None)
         assert balance.unrealized_pnl is None
 
+    def test_unrealized_pnl_negative_is_valid(self):
+        # MENOR-2 (auditoría post-3.72): una posición perdedora es el caso
+        # más común del mundo real -- protección explícita contra una
+        # futura regresión que agregue una validación >=0 sin evidencia.
+        balance = _balance(unrealized_pnl=Decimal("-4.75"))
+        assert balance.unrealized_pnl == Decimal("-4.75")
+
+    def test_usd_value_negative_is_valid(self):
+        # MENOR-2 (auditoría post-3.72): mismo principio -- usd_value sigue
+        # el signo del activo subyacente, no hay evidencia de que Bybit
+        # garantice no-negatividad.
+        balance = _balance(usd_value=Decimal("-100.5"))
+        assert balance.usd_value == Decimal("-100.5")
+
     def test_unrealized_pnl_zero_is_valid(self):
         balance = _balance(unrealized_pnl=Decimal("0"))
         assert balance.unrealized_pnl == Decimal("0")
@@ -370,3 +384,58 @@ class TestPurityByAst:
         import execution_gateway.wallet_balance_reader as module
         imports = self._module_imports(module)
         assert set(imports) == {"typing", "execution_gateway.wallet_balance_contracts"}
+
+
+class TestTotalAvailableBalanceSemantics:
+    """IMPORTANTE-2 (auditoría post-3.72): total_available_balance NO es
+    buying power en USDT ni "lo que puede usarse para abrir una posición
+    nueva" -- es una magnitud de cuenta en equivalente USD, neta de un
+    Haircut no definido por Bybit, dependiente del margin mode, que agrega
+    todos los activos de colateral. Estos tests documentan que el contrato
+    NO impone ninguna relación con el balance de USDT específicamente --
+    imponer una no sería fiel a la semántica remota real."""
+
+    def test_can_exceed_any_single_currency_wallet_balance(self):
+        # No hay invariante que ate total_available_balance al balance de
+        # ninguna moneda particular -- es coherente con ser una magnitud
+        # agregada multi-activo, no un espejo de USDT.
+        usdt = _balance(coin="USDT", wallet_balance=Decimal("10"))
+        snapshot = _snapshot(total_available_balance=Decimal("99999"), currency_balances=(usdt,))
+        assert snapshot.total_available_balance == Decimal("99999")
+
+    def test_can_be_less_than_any_single_currency_wallet_balance(self):
+        usdt = _balance(coin="USDT", wallet_balance=Decimal("99999"))
+        snapshot = _snapshot(total_available_balance=Decimal("1"), currency_balances=(usdt,))
+        assert snapshot.total_available_balance == Decimal("1")
+
+    def test_valid_with_zero_currency_balances(self):
+        # total_available_balance es un campo de CUENTA, no depende de que
+        # currency_balances tenga contenido -- refuerza que no es un
+        # "espejo" de ningún balance por moneda.
+        snapshot = _snapshot(total_available_balance=Decimal("500"), currency_balances=())
+        assert snapshot.total_available_balance == Decimal("500")
+
+    def test_no_relationship_enforced_with_usdt_coin_presence(self):
+        # Snapshot sin ninguna entrada USDT sigue siendo válido con
+        # total_available_balance positivo -- el campo no exige que exista
+        # una fila USDT correspondiente.
+        non_usdt = _balance(coin="BTC")
+        snapshot = _snapshot(total_available_balance=Decimal("42"), currency_balances=(non_usdt,))
+        assert snapshot.total_available_balance == Decimal("42")
+        assert all(b.coin != "USDT" for b in snapshot.currency_balances)
+
+
+class TestCurrencyBalancesDuplicatesNotRejectedAtContractLevel:
+    """MENOR-3 (auditoría post-3.72): el contrato es una tupla simple --
+    no impone unicidad de `coin`. La deduplicación (o su rechazo) es una
+    decisión del interpreter, no del contrato de dominio; verificado aquí
+    para que una futura restricción de unicidad en el contrato mismo sea
+    una decisión deliberada, no un efecto colateral accidental."""
+
+    def test_duplicate_coin_entries_both_preserved(self):
+        a = _balance(coin="USDT", wallet_balance=Decimal("1"))
+        b = _balance(coin="USDT", wallet_balance=Decimal("2"))
+        snapshot = _snapshot(currency_balances=(a, b))
+        assert len(snapshot.currency_balances) == 2
+        assert snapshot.currency_balances[0].wallet_balance == Decimal("1")
+        assert snapshot.currency_balances[1].wallet_balance == Decimal("2")

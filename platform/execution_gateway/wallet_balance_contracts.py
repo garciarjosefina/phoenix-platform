@@ -56,15 +56,35 @@ class WalletBalanceSnapshot:
     # Totales de cuenta (USD-denominados, según /v5/account/wallet-balance):
     # los cinco campos mínimos necesarios para distinguir "lo que la cuenta
     # posee" (wallet_balance) de "lo que la cuenta vale ahora mismo incluyendo
-    # PnL no realizado" (equity) de "lo que realmente puede usarse para abrir
-    # posición nueva" (available_balance) -- la distinción central que motivó
-    # este hito -- más los dos agregados de margen ya comprometido/en riesgo
-    # de liquidación (initial_margin/maintenance_margin), esenciales para un
-    # futuro Risk Engine. Deliberadamente no se incluyen totalMarginBalance,
+    # PnL no realizado" (equity) de total_available_balance -- ver más abajo,
+    # NO es simplemente "capital disponible para operar" -- más los dos
+    # agregados de margen ya comprometido/en riesgo de liquidación
+    # (initial_margin/maintenance_margin), esenciales para un futuro Risk
+    # Engine. Deliberadamente no se incluyen totalMarginBalance,
     # totalPerpUPL, accountIMRate/accountMMRate (ver ADR correspondiente):
     # son derivables o redundantes con los cinco campos ya presentes para el
     # alcance actual de Phoenix (linear USDT), y agregarlos "por si acaso"
     # violaría el principio de no exponer superficie no justificada.
+    #
+    # total_available_balance -- semántica exacta, corrección post-3.72
+    # (IMPORTANTE-2): NO representa "buying power en USDT" ni "lo que
+    # puede usarse directamente para abrir una posición nueva" -- esa
+    # lectura fue la de la versión original de este comentario y era
+    # engañosa. Según la documentación oficial de Bybit V5:
+    #   - es una magnitud a nivel de CUENTA (no por moneda);
+    #   - está expresada en equivalente USD, no en USDT;
+    #   - agrega TODOS los activos de colateral de la cuenta, no sólo USDT;
+    #   - depende del margin mode (fórmula distinta en Cross Margin:
+    #     totalMarginBalance - Haircut - totalInitialMargin, vs. Portfolio
+    #     Margin: totalEquity - Haircut - totalInitialMargin);
+    #   - incorpora un "Haircut" que Bybit no define en esta página.
+    # NO debe usarse aislado como buying power para dimensionar una orden
+    # linear USDT: un Risk Engine que lo haga podría sobredimensionar
+    # posiciones contra colateral no-USDT sujeto a haircut y a variación de
+    # precio. El futuro Risk Engine deberá interpretar este campo en
+    # conjunto con currency_balances, la moneda de settlement del
+    # instrumento, el colateral relevante y el margin mode -- ninguna de
+    # esas reglas se construye en este hito (ver ADR-002).
     total_equity: Decimal
     total_wallet_balance: Decimal
     total_available_balance: Decimal

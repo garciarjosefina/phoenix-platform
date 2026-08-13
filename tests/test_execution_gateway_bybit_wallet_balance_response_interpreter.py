@@ -222,6 +222,118 @@ class TestZeroAndEmptySemantics:
         snapshot = _interpret(accounts=[_account_item(coin=(_coin_item(equity="0"),))])
         assert snapshot.currency_balances[0].equity == Decimal("0")
 
+    def test_unrealised_pnl_negative_preserved_end_to_end(self):
+        # MENOR-2 (auditoría post-3.72): posición perdedora, el caso más
+        # común del mundo real -- verificado de punta a punta desde el
+        # payload remoto, no sólo a nivel de contrato.
+        snapshot = _interpret(accounts=[_account_item(coin=(_coin_item(unrealisedPnl="-12.5"),))])
+        assert snapshot.currency_balances[0].unrealized_pnl == Decimal("-12.5")
+
+    def test_usd_value_negative_preserved_end_to_end(self):
+        snapshot = _interpret(accounts=[_account_item(coin=(_coin_item(usdValue="-3.25"),))])
+        assert snapshot.currency_balances[0].usd_value == Decimal("-3.25")
+
+    def test_wallet_balance_negative_preserved_end_to_end(self):
+        snapshot = _interpret(accounts=[_account_item(coin=(_coin_item(walletBalance="-1"),))])
+        assert snapshot.currency_balances[0].wallet_balance == Decimal("-1")
+
+    def test_equity_negative_preserved_end_to_end(self):
+        snapshot = _interpret(accounts=[_account_item(coin=(_coin_item(equity="-2"),))])
+        assert snapshot.currency_balances[0].equity == Decimal("-2")
+
+
+class TestNoAccidentalDeduplication:
+    """MENOR-3 (auditoría post-3.72): mismo principio que Open Orders Read
+    (Hito 3.71, TestNoAccidentalDeduplication) -- el interpreter no debe
+    colapsar en silencio dos entradas remotas con el mismo `coin`. Se
+    preserva exactamente lo que devuelve el exchange; detectar anomalías
+    (p.ej. duplicados inesperados) queda para una capa superior futura."""
+
+    def test_two_entries_same_coin_both_preserved(self):
+        coins = (
+            _coin_item(coin="USDT", walletBalance="10"),
+            _coin_item(coin="USDT", walletBalance="20"),
+        )
+        snapshot = _interpret(accounts=[_account_item(coin=coins)])
+        assert len(snapshot.currency_balances) == 2
+        balances = [b.wallet_balance for b in snapshot.currency_balances]
+        assert balances == [Decimal("10"), Decimal("20")]
+
+    def test_no_loss_no_collapse_with_three_duplicates(self):
+        coins = tuple(_coin_item(coin="USDT", walletBalance=str(i)) for i in range(3))
+        snapshot = _interpret(accounts=[_account_item(coin=coins)])
+        assert len(snapshot.currency_balances) == 3
+
+
+class TestUsdtAbsencePermitted:
+    """MENOR-1 (auditoría post-3.72): Bybit documenta que, al omitir `coin`
+    en la query, sólo se devuelven activos con saldo no-cero ("If not
+    passed, it returns non-zero asset info"). Ausencia de USDT en
+    currency_balances es, por lo tanto, un resultado remoto legítimo (saldo
+    cero), no un error ni un estado desconocido -- nunca se sintetiza una
+    fila USDT artificial."""
+
+    def test_usdt_absent_among_other_currencies_is_valid(self):
+        snapshot = _interpret(accounts=[_account_item(coin=(_coin_item(coin="BTC"),))])
+        assert all(b.coin != "USDT" for b in snapshot.currency_balances)
+        assert len(snapshot.currency_balances) == 1
+
+    def test_no_synthetic_usdt_row_ever_created(self):
+        snapshot = _interpret(accounts=[_account_item(coin=())])
+        assert snapshot.currency_balances == ()
+        assert not any(b.coin == "USDT" for b in snapshot.currency_balances)
+
+    def test_account_totals_remain_complete_even_without_usdt_entry(self):
+        # La ausencia de la fila USDT NO degrada los totales de cuenta --
+        # son estructuras independientes.
+        snapshot = _interpret(accounts=[_account_item(totalEquity="500", coin=())])
+        assert snapshot.total_equity == Decimal("500")
+        assert snapshot.currency_balances == ()
+
+
+class TestAccountWideFieldClassification:
+    """IMPORTANTE-1 (auditoría post-3.72): documenta y protege la
+    clasificación explícita de los cinco totales de cuenta contra evidencia
+    oficial (ver comentario de _ACCOUNT_REQUIRED_FIELDS). Los cinco quedan
+    en categoría C (documentación insuficiente para relajar selectivamente
+    alguno) y permanecen esenciales/fail-closed -- ninguno se convirtió a
+    Optional sin evidencia field-specific. Estos tests fijan ese
+    comportamiento como contrato explícito, no accidental."""
+
+    def test_total_equity_empty_still_fails_closed(self):
+        with pytest.raises(BybitResponseProcessingError):
+            _interpret(accounts=[_account_item(totalEquity="")])
+
+    def test_total_wallet_balance_empty_still_fails_closed(self):
+        with pytest.raises(BybitResponseProcessingError):
+            _interpret(accounts=[_account_item(totalWalletBalance="")])
+
+    def test_total_available_balance_empty_still_fails_closed(self):
+        with pytest.raises(BybitResponseProcessingError):
+            _interpret(accounts=[_account_item(totalAvailableBalance="")])
+
+    def test_total_initial_margin_empty_still_fails_closed(self):
+        with pytest.raises(BybitResponseProcessingError):
+            _interpret(accounts=[_account_item(totalInitialMargin="")])
+
+    def test_total_maintenance_margin_empty_still_fails_closed(self):
+        with pytest.raises(BybitResponseProcessingError):
+            _interpret(accounts=[_account_item(totalMaintenanceMargin="")])
+
+    def test_none_of_the_five_account_totals_were_made_optional(self):
+        # Ningún campo de _ACCOUNT_REQUIRED_FIELDS relevante a los cinco
+        # totales es tratado con el helper opcional (_to_optional_finite_decimal)
+        # -- verificado por inspección de fuente para que una futura
+        # relajación silenciosa sea detectable.
+        import inspect
+        import execution_gateway.bybit_wallet_balance_response_interpreter as module
+        src = inspect.getsource(module)
+        for field in ("totalEquity", "totalWalletBalance", "totalAvailableBalance",
+                      "totalInitialMargin", "totalMaintenanceMargin"):
+            line = next(l for l in src.splitlines() if f'item["{field}"]' in l)
+            assert "_to_finite_decimal(" in line, f"{field} debe seguir siendo esencial (fail-closed)"
+            assert "_to_optional_finite_decimal(" not in line, f"{field} no debe volverse opcional sin evidencia"
+
 
 class TestNumerics:
     def test_high_precision_decimal_preserved(self):

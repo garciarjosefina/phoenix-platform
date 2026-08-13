@@ -12,6 +12,42 @@ _PROCESSING_ERROR_MESSAGE = "Bybit response could not be processed"
 # (ver wallet_balance_contracts.py) son esenciales -- son la razón de ser de
 # este hito. `coin` (la lista anidada) también es esencial estructuralmente:
 # sin ella no hay forma de construir currency_balances.
+#
+# Clasificación explícita contra evidencia oficial (Corrección post-3.72,
+# auditoría adversarial independiente -- IMPORTANTE-1):
+#
+#   totalEquity              -> C (documentación insuficiente)
+#   totalWalletBalance       -> C (documentación insuficiente)
+#   totalAvailableBalance    -> C (documentación insuficiente)
+#   totalInitialMargin       -> C (documentación insuficiente)
+#   totalMaintenanceMargin   -> C (documentación insuficiente)
+#
+# La documentación oficial de Bybit V5 contiene una única nota, genérica y
+# aplicada por igual a los cinco ("All account wide fields are not
+# applicable to isolated margin"), ubicada como bullet final tras la
+# descripción de accountMMRate -- NO como anotación individual de ningún
+# campo. Esa nota NO especifica qué representación toma cada campo cuando
+# "no aplica" (cadena vacía, "0", clave ausente, u otra cosa): no hay
+# evidencia field-specific que permita distinguir un campo de otro, ni que
+# permita inferir con confianza el valor concreto devuelto.
+#
+# Por contraste, este mismo endpoint SÍ documenta explícitamente "" para
+# otro conjunto de campos bajo otro modo (totalOrderIM/totalPositionIM/
+# totalPositionMM a nivel moneda, bajo portfolio margin: "For portfolio
+# margin mode, it returns \"\""), lo que confirma que Bybit sabe declarar
+# ese comportamiento cuando quiere -- y explícitamente no lo hizo para
+# estos cinco campos de cuenta bajo isolated margin.
+#
+# Decisión: ante documentación insuficiente para relajar selectivamente
+# alguno de los cinco, se mantienen los cinco esenciales y fail-closed
+# (ninguno se convierte a Optional). Relajarlos sin evidencia field-specific
+# repetiría exactamente el patrón que motivó las correcciones post-3.70
+# (leverage="") y post-3.71 (price="0"): una suposición no confirmada sobre
+# el dato remoto. La incertidumbre queda registrada aquí y en ADR-002 en
+# vez de resuelta por conveniencia. Si una cuenta Demo real bajo isolated
+# margin llega a producir un `BybitResponseProcessingError` observable en
+# producción, eso es la señal correcta -- evidencia real, no supuesta -- de
+# que corresponde revisar esta clasificación con datos concretos.
 _ACCOUNT_REQUIRED_FIELDS = (
     "totalEquity",
     "totalWalletBalance",
@@ -125,11 +161,20 @@ class BybitWalletBalanceResponseInterpreter:
 
         # /v5/account/wallet-balance no pagina (sin nextPageCursor en su
         # esquema documentado, a diferencia de /v5/position/list y
-        # /v5/order/realtime): `result.list` envuelve exactamente un objeto
-        # de cuenta por cada `accountType` consultado. Como este hito
-        # consulta un único accountType (UNIFIED, fijo), se espera
-        # exactamente un elemento -- 0 o >1 es una forma remota no modelada
-        # que se rechaza en vez de adivinar cuál elemento usar.
+        # /v5/order/realtime). El ejemplo oficial de respuesta muestra
+        # `result.list` con un único objeto de cuenta para un `accountType`
+        # consultado, pero la documentación no declara explícitamente la
+        # cardinalidad como garantía formal.
+        #
+        # `len(raw_list) != 1` es, por lo tanto, una invariante conservadora
+        # de Phoenix para accountType=UNIFIED -- no una cardinalidad
+        # explícitamente garantizada por la documentación oficial consultada
+        # (corrección post-3.72, MENOR-5: el comentario original presentaba
+        # esto como si fuera un hecho documentado por Bybit). Se mantiene
+        # fail-closed deliberadamente: 0 o >1 elementos es una forma remota
+        # no modelada por este hito, y se prefiere rechazar explícitamente
+        # antes que adivinar cuál elemento usar o asumir sin evidencia que
+        # esa forma nunca ocurre.
         if len(raw_list) != 1:
             raise BybitResponseProcessingError(message=_PROCESSING_ERROR_MESSAGE)
 
