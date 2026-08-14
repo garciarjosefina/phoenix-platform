@@ -168,6 +168,77 @@ class TestSuccess:
         assert metadata.server_time_ms == 1_712_345_678_901
 
 
+class TestBaseQuoteSettlementIdentity:
+    """Corrección post-auditoría adversarial (IMPORTANTE-1): el código
+    productivo del mapping baseCoin/quoteCoin/settleCoin -> base_asset/
+    quote_asset/settlement_asset ya era correcto -- el hallazgo era de
+    COBERTURA, no de comportamiento. Todos los fixtures previos usaban
+    quoteCoin==settleCoin=="USDT" (valores iguales), por lo que un cruce
+    entre esos dos campos específicos quedaba invisible a la suite. Estos
+    tests usan tres valores mutuamente distintos y atraviesan el
+    interpreter real (nunca construyen ExecutionInstrumentMetadata
+    directamente) -- cualquier cruce entre cualquier par de los tres
+    campos (base<->quote, base<->settle, quote<->settle, o una lectura de
+    la fuente remota equivocada) hace fallar al menos una de las tres
+    aserciones independientes."""
+
+    def test_mutually_distinct_base_quote_settle_land_in_correct_fields(self):
+        metadata = _interpret(items=[_item(baseCoin="AAA", quoteCoin="BBB", settleCoin="CCC")])
+        assert metadata.base_asset == "AAA"
+        assert metadata.quote_asset == "BBB"
+        assert metadata.settlement_asset == "CCC"
+
+    def test_base_asset_specifically_not_quote_or_settle(self):
+        metadata = _interpret(items=[_item(baseCoin="AAA", quoteCoin="BBB", settleCoin="CCC")])
+        assert metadata.base_asset != "BBB"
+        assert metadata.base_asset != "CCC"
+
+    def test_quote_asset_specifically_not_base_or_settle(self):
+        metadata = _interpret(items=[_item(baseCoin="AAA", quoteCoin="BBB", settleCoin="CCC")])
+        assert metadata.quote_asset != "AAA"
+        assert metadata.quote_asset != "CCC"
+
+    def test_settlement_asset_specifically_not_base_or_quote(self):
+        metadata = _interpret(items=[_item(baseCoin="AAA", quoteCoin="BBB", settleCoin="CCC")])
+        assert metadata.settlement_asset != "AAA"
+        assert metadata.settlement_asset != "BBB"
+
+    def test_multi_field_probe_distinct_filters_do_not_cross_with_distinct_identity(self):
+        # Probe multi-field explícito (sección 5 de la corrección): symbol
+        # se mantiene BTCUSDT deliberadamente -- no se infiere identidad
+        # desde el symbol, precisamente para que este probe pruebe algo
+        # distinto de TestSuccess.test_multi_field (que ya cubre filtros).
+        metadata = _interpret(items=[_item(
+            symbol="BTCUSDT", baseCoin="AAA", quoteCoin="BBB", settleCoin="CCC",
+            priceFilter=_price_filter(tickSize="0.11", minPrice="0.22", maxPrice="333"),
+            lotSizeFilter=_lot_size_filter(
+                qtyStep="0.001", minOrderQty="0.002", maxOrderQty="123",
+                maxMktOrderQty="77", minNotionalValue="5",
+            ),
+            leverageFilter=_leverage_filter(minLeverage="1", maxLeverage="73", leverageStep="0.01"),
+        )])
+        assert metadata.symbol == "BTCUSDT"
+        assert metadata.base_asset == "AAA"
+        assert metadata.quote_asset == "BBB"
+        assert metadata.settlement_asset == "CCC"
+        assert metadata.tick_size == Decimal("0.11")
+        assert metadata.min_price == Decimal("0.22")
+        assert metadata.max_price == Decimal("333")
+        assert metadata.qty_step == Decimal("0.001")
+        assert metadata.min_order_qty == Decimal("0.002")
+        assert metadata.max_order_qty == Decimal("123")
+        assert metadata.max_market_order_qty == Decimal("77")
+        assert metadata.min_notional_value == Decimal("5")
+        assert metadata.min_leverage == Decimal("1")
+        assert metadata.max_leverage == Decimal("73")
+        assert metadata.leverage_step == Decimal("0.01")
+        # Ningun valor de asset-identity debe filtrarse a un campo numerico
+        # ni viceversa -- confirmacion final de independencia total.
+        identity_values = {metadata.base_asset, metadata.quote_asset, metadata.settlement_asset}
+        assert identity_values == {"AAA", "BBB", "CCC"}
+        assert len(identity_values) == 3
+
+
 class TestSymbolIdentity:
     """Sección 5/17 del Hito 3.73: identidad inequívoca del instrumento."""
 
