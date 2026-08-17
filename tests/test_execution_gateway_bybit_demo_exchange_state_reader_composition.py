@@ -178,6 +178,91 @@ class TestCreateConfiguredBybitDemoExchangeStateReader:
         assert r1._positions_reader is not r2._positions_reader
 
 
+def _config_fingerprint(reader):
+    # Extrae, del GRAFO DE OBJETOS REAL construido por la factory
+    # configurada (no de source code ni de mocks), los cinco valores que
+    # determinan contra qué cuenta/entorno autentica un reader privado.
+    # Misma ruta de atributos para los tres readers privados (Positions/
+    # OpenOrders/Wallet), porque los tres se construyen con el mismo
+    # patrón GET privado (BybitPrivateGetApi -> BybitPrivateGetRequestSender
+    # -> StandardBybitAuthenticator -> BybitDemoCredentials).
+    sender = reader._private_get_api._sender
+    return {
+        "api_key": sender._authenticator._credentials.api_key,
+        "api_secret": sender._authenticator._credentials.api_secret,
+        "recv_window_ms": sender._authenticator._recv_window_ms,
+        "timeout_seconds": sender._request_executor._timeout_seconds,
+        "base_url": reader._url_builder._base_url,
+    }
+
+
+class TestConfigCoherenceAcrossSubReaders:
+    """Hallazgo IMPORTANTE-1 de la auditoría adversarial independiente del
+    Hito 3.74: produccion ya construye los tres sub-readers a partir del
+    mismo BybitDemoExecutionConfig (verificado conductualmente por la
+    auditoria: os.environ se lee una sola vez, el mismo objeto config se
+    pasa a las tres sub-factories configuradas), pero nada en la suite
+    aseveraba ese hecho -- un mutante que hiciera que Wallet autenticara
+    contra una cuenta distinta sobrevivia los 173 tests del hito. Estos
+    tests convierten esa coherencia, ya correcta en producción, en una
+    propiedad protegida contra regresión. No se agrega ninguna validación
+    nueva en tiempo de ejecución -- la factory ya la garantiza hoy."""
+
+    def _build(self, **overrides):
+        defaults = dict(
+            api_key="CONFIG-KEY-AAA", api_secret="CONFIG-SECRET-BBB",
+            recv_window_ms=5432, timeout_seconds=17,
+        )
+        defaults.update(overrides)
+        config = BybitDemoExecutionConfig(**defaults)
+        reader = create_configured_bybit_demo_exchange_state_reader(config=config)
+        return (
+            _config_fingerprint(reader._positions_reader),
+            _config_fingerprint(reader._open_orders_reader),
+            _config_fingerprint(reader._wallet_balance_reader),
+        )
+
+    def test_all_three_readers_share_same_api_key(self):
+        p, o, w = self._build()
+        assert p["api_key"] == o["api_key"] == w["api_key"] == "CONFIG-KEY-AAA"
+
+    def test_all_three_readers_share_same_api_secret(self):
+        p, o, w = self._build()
+        assert p["api_secret"] == o["api_secret"] == w["api_secret"] == "CONFIG-SECRET-BBB"
+
+    def test_all_three_readers_share_same_recv_window_ms(self):
+        p, o, w = self._build()
+        assert p["recv_window_ms"] == o["recv_window_ms"] == w["recv_window_ms"] == 5432
+
+    def test_all_three_readers_share_same_timeout_seconds(self):
+        p, o, w = self._build()
+        assert p["timeout_seconds"] == o["timeout_seconds"] == w["timeout_seconds"] == 17
+
+    def test_all_three_readers_share_same_demo_base_url(self):
+        p, o, w = self._build()
+        assert p["base_url"] == o["base_url"] == w["base_url"]
+        assert p["base_url"] == "https://api-demo.bybit.com"
+        assert "mainnet" not in p["base_url"] and "api.bybit.com" != p["base_url"].split("//")[-1]
+
+    def test_full_fingerprint_identical_across_all_three_readers(self):
+        # Aseveracion conjunta: ningun campo puede divergir entre los
+        # tres readers de una misma ronda -- una configuracion hibrida
+        # (una cuenta para Wallet, otra para Positions/OpenOrders) no
+        # debe poder colarse silenciosamente.
+        p, o, w = self._build(
+            api_key="K2", api_secret="S2", recv_window_ms=9999, timeout_seconds=42,
+        )
+        assert p == o == w
+
+    def test_distinct_configs_produce_distinct_fingerprints(self):
+        # Control negativo: confirma que el fingerprint realmente
+        # distingue configuraciones distintas (no es una tautologia que
+        # siempre compara igual a si misma).
+        p1, _, _ = self._build(api_key="ACCOUNT-A")
+        p2, _, _ = self._build(api_key="ACCOUNT-B")
+        assert p1["api_key"] != p2["api_key"]
+
+
 class TestBootstrap:
     def test_importable_from_package(self):
         assert hasattr(execution_gateway, "bootstrap_bybit_demo_exchange_state_reader_from_env")
@@ -231,3 +316,50 @@ class TestBootstrap:
             ]
             code = "\n".join(code_lines)
             assert "PHOENIX_" not in code
+
+    def test_environ_read_exactly_once_per_key_not_once_per_subreader(self):
+        # Conductual, no de source: si el bootstrap releyera el entorno de
+        # forma independiente para cada uno de los tres sub-readers, cada
+        # clave se leeria 3 veces en vez de 1 -- y una mutacion del
+        # entorno entre esas lecturas podria producir una ronda con
+        # readers autenticados contra configuraciones distintas.
+
+        class _CountingEnviron(dict):
+            def __init__(self, data):
+                super().__init__(data)
+                self.reads = []
+
+            def __getitem__(self, k):
+                self.reads.append(k)
+                return super().__getitem__(k)
+
+            def get(self, k, default=None):
+                self.reads.append(k)
+                return super().get(k, default)
+
+        spy_env = _CountingEnviron(_VALID_ENV)
+        bootstrap_bybit_demo_exchange_state_reader_from_env(environ=spy_env)
+        key_reads = [k for k in spy_env.reads if k == "PHOENIX_BYBIT_DEMO_API_KEY"]
+        assert len(key_reads) == 1
+
+    def test_all_three_sub_readers_share_config_loaded_from_same_environ_round(self):
+        # Extremo a extremo desde la funcion publica de bootstrap (no
+        # desde la factory configurada directamente): confirma que la
+        # coherencia de configuracion tambien se sostiene cuando el
+        # origen es una unica lectura de entorno, no un config construido
+        # a mano en el test.
+        distinctive_env = {
+            "PHOENIX_BYBIT_DEMO_API_KEY": "ENV-KEY-ZZZ",
+            "PHOENIX_BYBIT_DEMO_API_SECRET": "ENV-SECRET-YYY",
+            "PHOENIX_BYBIT_RECV_WINDOW_MS": "7777",
+            "PHOENIX_HTTP_TIMEOUT_SECONDS": "23",
+        }
+        reader = bootstrap_bybit_demo_exchange_state_reader_from_env(environ=distinctive_env)
+        p = _config_fingerprint(reader._positions_reader)
+        o = _config_fingerprint(reader._open_orders_reader)
+        w = _config_fingerprint(reader._wallet_balance_reader)
+        assert p == o == w
+        assert p["api_key"] == "ENV-KEY-ZZZ"
+        assert p["api_secret"] == "ENV-SECRET-YYY"
+        assert p["recv_window_ms"] == 7777
+        assert p["timeout_seconds"] == 23
