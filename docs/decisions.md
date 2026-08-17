@@ -394,4 +394,32 @@ Ningún campo fue agregado al contrato en esta corrección — la revisión conf
 **5 tests nuevos, suite 5472→5477.**
 **5/5 mutaciones de esta corrección verificadas y detectadas** (`quote_asset`↔`settlement_asset`, `settlement_asset←quoteCoin`, `base_asset←quoteCoin`, `quote_asset←baseCoin`, `settlement_asset←baseCoin`) — cada una restaurada y verificada byte-idéntica contra el original.
 **Sin conexión real con Bybit en esta corrección; sin uso de Railway; sin cambio de comportamiento productivo.**
-**Hito 3.73 pendiente de reauditoría final** tras esta corrección.
+**Hito 3.73 pendiente de reauditoría final** tras esta corrección — **actualización: reauditoría posterior confirmó `ACEPTAR HITO 3.73`** (ver `docs/progress.md`, fila "Reauditoría post-corrección 3.73").
+
+---
+
+## ADR-003 — El repositorio, no la memoria de conversación, es la fuente de verdad de Phoenix
+
+**Fecha:** 2026-08-17
+**Contexto:** Hito 3.75 — Project Memory & Architecture Hardening. Motivación explícita: Claude Code (y cualquier otro agente) tiene memoria limitada o nula entre conversaciones; el proyecto ya lleva más de 70 hitos y varias auditorías independientes, cada una realizada por una sesión sin acceso a las anteriores. `D-009` ya establecía que `docs/progress.md`/`decisions.md`/`handoff.md` son la fuente de verdad, pero no formalizaba explícitamente: (a) que el *código* es evidencia primaria por encima de cualquier documento cuando ambos discrepan; (b) que la memoria de chat/conversación **no** tiene ninguna autoridad, ni siquiera como desempate; (c) un procedimiento obligatorio de reingreso para una sesión nueva; (d) la obligación de detenerse ante ambigüedad en vez de resolverla por conveniencia.
+
+**Decisión 1 — Jerarquía de evidencia, de mayor a menor autoridad:**
+1. El código y los tests tal como existen en el repositorio (comportamiento real).
+2. `docs/decisions.md` (decisiones vinculantes) y `docs/architecture.md` (mapa del sistema actual).
+3. `docs/handoff.md` y `docs/progress.md` (estado y bitácora histórica).
+4. Memoria de conversación — **sin autoridad alguna**. Nunca se asume el estado de un componente, una decisión tomada, o un conteo de tests desde lo que una sesión "recuerda" haber hecho antes; se reconstruye desde el repositorio.
+
+**Decisión 2 — Procedimiento de reingreso obligatorio.** Toda sesión nueva debe leer, en orden, antes de modificar cualquier cosa: `AGENTS.md` → `docs/architecture.md` → `docs/handoff.md` → `docs/decisions.md` → `docs/progress.md` → el código del componente específico que vaya a tocar. Este orden y esta obligación quedan fijados en `AGENTS.md` (manual operativo, ver raíz del repo), que este ADR referencia en vez de duplicar.
+
+**Decisión 3 — Ante contradicción entre documentación y código, o entre documentos, no elegir arbitrariamente.** Si `docs/architecture.md`/`decisions.md`/`handoff.md`/`progress.md` se contradicen entre sí, o contradicen el comportamiento real del código, la sesión debe detenerse y reportar la contradicción en vez de resolverla silenciosamente a favor de uno u otro. Excepción explícita: una sección de `docs/handoff.md` que describe un estado histórico ya superado y contradicho por otra sección **del mismo documento** más reciente no es una ambigüedad genuina — es staleness corregible directamente (ver corrección aplicada en este mismo hito a las secciones "Qué falta construir"/"Estructura del repo"/"Railway" de `handoff.md`, que databan de la Fase 2 y contradecían la propia sección "Estado al ..." del mismo archivo).
+
+**Decisión 4 — Obligación de actualizar documentación, no opcional.** Todo hito que cierre con un cambio de estado real (componente aceptado, decisión tomada, deuda cerrada o abierta) debe reflejarse en `docs/progress.md`/`handoff.md`/`decisions.md` antes de considerarse terminado. Un hito "completo" sin su actualización documental correspondiente dejó una fuente de verdad incompleta — el propio Hito 3.74 (auditoría final) es un ejemplo: el veredicto `ACEPTAR HITO 3.74` existió sólo en una conversación hasta que este hito lo registró explícitamente en `docs/progress.md`/`handoff.md`.
+
+**Relación con `D-009`:** este ADR extiende, no reemplaza, `D-009`. `D-009` sigue vigente para su alcance original (los tres documentos de `docs/`); este ADR agrega el código como evidencia de mayor autoridad todavía, formaliza la ausencia de autoridad de la memoria de conversación, y fija el procedimiento de reingreso mediante `AGENTS.md`.
+
+**No creado en este hito:** ningún componente productivo nuevo, ningún Port, ningún Reconciliation Engine, ningún cambio a `pyproject.toml`/`railway.toml`. Este ADR es puramente documental — regula cómo se usa y se mantiene la documentación existente, no agrega superficie de código.
+
+**Archivos nuevos:** `AGENTS.md` (raíz), `docs/architecture.md`.
+**Archivos auditados y corregidos (staleness, no ambigüedad):** `docs/handoff.md` (secciones "Qué falta construir"/"Estructura del repo"/"Railway", conteo de tests, fecha de "Estado al", registro del veredicto `ACEPTAR HITO 3.74`), `docs/progress.md` (fila de reauditoría final 3.74, próximo hito).
+**No modificado:** todo `platform/`, todos los tests productivos, `pyproject.toml`, `railway.toml`, cualquier ADR/decisión existente (sólo adición, ninguna reescrita).
+**Sin conexión real con Bybit; sin uso de Railway.**
