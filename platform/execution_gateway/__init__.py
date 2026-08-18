@@ -152,6 +152,12 @@ from execution_gateway.bybit_demo_exchange_state_reader_env_bootstrap import (
     bootstrap_bybit_demo_exchange_state_reader_from_env,
 )
 from execution_gateway.bybit_demo_exchange_state_query import query_bybit_demo_exchange_state
+from execution_gateway.expected_execution_state_contracts import (
+    ExpectedExecutionScope,
+    ExpectedPosition,
+    ExpectedOpenOrder,
+    ExpectedExecutionState,
+)
 
 __all__ = [
     "__version__",
@@ -275,4 +281,8 @@ __all__ = [
     "create_configured_bybit_demo_exchange_state_reader",
     "bootstrap_bybit_demo_exchange_state_reader_from_env",
     "query_bybit_demo_exchange_state",
+    "ExpectedExecutionScope",
+    "ExpectedPosition",
+    "ExpectedOpenOrder",
+    "ExpectedExecutionState",
 ]
