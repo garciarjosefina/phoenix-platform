@@ -130,6 +130,8 @@ This was recognized as exactly this kind of ambiguity during Hito 3.74 and resol
 
 This is a decided boundary (ADR-002, Hito 3.74 update), not an open question — do not silently revisit it without a new explicit decision.
 
+**What Instrument Metadata's fields represent (ADR-002, Decisión 6):** exchange-side constraints and capabilities for a symbol — price/quantity/leverage filters (`min_leverage`/`max_leverage`/`leverage_step`, min/max order quantity, tick size, min notional, etc.) describe what Bybit technically permits for that instrument. **They are not** recommended leverage, recommended position sizing, a risk policy, or capital allocation guidance — no code anywhere in this project treats them as such, and none should. A future Risk Engine or Order Validation layer may *consult* these as hard constraints; it must not be built on the assumption that they represent a recommendation.
+
 ---
 
 ## 8. Error boundaries
@@ -153,7 +155,7 @@ Domain-facing Port method (execute() / query_*())
 
 ## 9. Configuration and runtime
 
-- **Environment:** Bybit Demo only (`D-011`). Mainnet/Testnet are explicitly rejected, not just unimplemented.
+- **Environment:** Bybit Demo only (`D-011`). `Testnet` is excluded and rejected outright. `Mainnet` is not part of the current goal and must not be assumed or implemented by default — but `D-011` does not make this an eternal prohibition: it explicitly allows Mainnet *given a future explicit decision*. Do not build Mainnet support preemptively; do not treat the door as permanently closed either.
 - **Deployment target:** Railway (`D-008`). As of the last recorded state, **no Railway service is connected to `main`** — `phoenix-smoke-demo` (the only service ever created) was manually deleted after Hito 3.68's real-world validation. `railway.toml` remains in the repo as reference config for a future manual redeploy, not an active service.
 - **Region:** any future Bybit-connected Railway service must default to EU West / Amsterdam (`europe-west4`) — US regions are confirmed to fail, evidenced by one A/B test (not an exhaustive region survey).
 - **`PYTHONPATH=/app/platform`** is a live, unresolved packaging debt (`D-014`, Decisión 2) — required as a manual Railway environment variable because `railway.toml`'s `buildCommand`/`pip install .` alone reproducibly fails to make `execution_gateway` importable at runtime on Railway's build image, for a cause that is suspected (Railpack layer assembly) but not confirmed. Do not assume this is resolved without checking `docs/decisions.md` D-014 again.
@@ -188,6 +190,8 @@ Active as of this document's last update — verify each against `docs/decisions
 - **`leverageFilter` non-`Mapping` tolerated as absence** in Instrument Metadata (accepted deuda MENOR, Hito 3.73) — a malformed-but-present block is treated the same as an absent one; only an individual malformed value *inside* a present block fails closed.
 - **Env-loader raw `ValueError`** on structurally invalid timeout values, present since Hito 3.65 and replicated (not introduced) by Instrument Metadata's minimal loader (accepted deuda MENOR, Hito 3.73).
 - **No Reconciliation Engine, no drift-tolerance policy, no expected-vs-actual comparison exists anywhere in this codebase.** `ExchangeStateSnapshot` measures and exposes observation drift; nothing in Phoenix currently decides what to do about it.
+- **`BybitEndpoint.method` is declared metadata that nothing consumes** (debt since the retrospective Auditoría C, recited in ADR-002 Decisión 2) — `bybit_url_builder.py`/`bybit_endpoint_executor.py`/`urllib_http_transport.py` never read `.method`; the POST stack is hardcoded to POST and the GET stack is a separate, parallel primitive rather than a generalization that honors this field. Not a bug — a known, accepted, unresolved debt.
+- **The authenticated connectivity smoke test (built Hito 3.67, real-validated Hito 3.68) was never migrated to the reusable GET stack** built afterward (Hito 3.70's `HttpGetTransport`/`UrllibGetHttpTransport`) — `bybit_demo_connectivity_smoke_test.py` still uses its own original inline `urllib.request.Request(method="GET")`, documented from the start as an accepted one-off bypass. ADR-002, Decisión 2 records this as explicitly out of scope, not forgotten.
 
 ---
 
