@@ -50,6 +50,12 @@ Phoenix
 │       └── Exchange State Snapshot      (Hito 3.74 — ACCEPTED)
 │           Aggregates the four account-wide reads above. See §6.
 │
+├── Expected Execution State             [IMPLEMENTED — domain contracts only, no Port]
+│   (Hito 3.76 — pending independent adversarial audit, not yet accepted)
+│   Pure immutable vocabulary for "what execution state Phoenix
+│   asserts should exist" within an explicit scope. NOT a Reconciliation
+│   Engine, not wired to ExchangeStateSnapshot. See §13.
+│
 ├── Future: Reconciliation Engine        [NOT YET IMPLEMENTED — no code, no Port]
 ├── Future: Market Regime Engine         [NOT YET IMPLEMENTED]
 ├── Future: Portfolio Orchestrator       [NOT YET IMPLEMENTED]
@@ -175,6 +181,7 @@ Domain-facing Port method (execute() / query_*())
 | Wallet Balance Read | 291+30 tests | 15/16 (13/14 correction) | NOT REAL-VALIDATED | ACCEPTED (Hito 3.72) |
 | Instrument Metadata Read | 347+5 tests | 19/20 (5/5 correction) | NOT REAL-VALIDATED | ACCEPTED (Hito 3.73) |
 | Exchange State Snapshot | 173+9 tests | 14/16 aggregate + 8/8 config-coherence | NOT REAL-VALIDATED | ACCEPTED (Hito 3.74) |
+| Expected Execution State (contracts only) | 118 tests | 15/15 detected | N/A — pure domain contracts, no I/O | PENDING AUDIT (Hito 3.76, not yet accepted) |
 
 **The single most important line in this table:** the only real-Bybit validation ever performed in this project's history is the authenticated GET connectivity smoke test (Hito 3.68). Every read-side primitive built since — including `ExchangeStateSnapshot` — is validated exclusively by offline tests against mocked HTTP responses. Do not describe any of them as "validated against Bybit" without qualifying "in tests, not in production."
 
@@ -199,9 +206,25 @@ Active as of this document's last update — verify each against `docs/decisions
 
 **A Reconciliation Engine** is the direction implied by `ExchangeStateSnapshot`'s design (observation without action, drift measured but not judged) and by the explicit "future Reconciliation Engine" references throughout `docs/decisions.md` (ADR-002 and its Hito 3.72/3.74 updates, and the "Advertencia de no-atomicidad" note under the post-3.72 correction). It has **not been designed or started** — no Port, no contract, no code exists for it, and **its scope has not been decided**. In particular, `docs/decisions.md` does not establish whether it is detection-only or whether it may also take repair actions — do not assume either. Before it can be built, at minimum the following are undecided and must be resolved as their own hito(s), not assumed:
 
-- What "expected/desired state" means and where it comes from
+- ~~What "expected/desired state" means and where it comes from~~ — **resolved by Hito 3.76**: see §13, `ExpectedExecutionState`. Note this only defines the vocabulary; it does not decide how a real `ExpectedExecutionState` gets *populated* for a live account (that's a future projection engine, still undecided).
 - Identity matching between observed and expected entities
 - A drift-tolerance policy (deliberately not decided by `ExchangeStateSnapshot`)
 - Mismatch classification
 - Stale-round rejection rules
 - Whether the engine is detection-only or may also take repair actions — undecided, not to be assumed either way
+
+---
+
+## 13. Expected Execution State (Hito 3.76 — pending independent adversarial audit)
+
+Four immutable domain contracts in `expected_execution_state_contracts.py` — pure vocabulary, no Port, no HTTP, no I/O, no Reconciliation Engine, no wiring to `ExchangeStateSnapshot`. Not yet accepted; do not treat as a stable public contract until an independent audit closes it (see `docs/progress.md`).
+
+**`ExpectedExecutionScope`** — `symbols: tuple[str, ...]`, no duplicates. Defines *where* the state is authoritative. A symbol outside `scope` is **unknown** (Phoenix asserts nothing) — never "expected flat." An empty scope (`symbols=()`) is valid, by the same precedent as every other collection field in the read-side (empty = legitimate, never an error).
+
+**`ExpectedPosition`** — identity `(symbol, side)`. Fields: `symbol`, `side` (same `"buy"`/`"sell"` vocabulary as `ExecutionPosition`), `quantity` (`Decimal`, finite, `> 0`). Represents the *aggregated* position Phoenix expects for that instrument/side — deliberately without `entry_price`/`leverage`/`unrealized_pnl`/`liquidation_price`/`margin`/`positionIdx`/`bot_id`/`strategy_id`. A zero-quantity expected position is never represented: "flat" is authoritative scope + absence of the corresponding `ExpectedPosition`.
+
+**`ExpectedOpenOrder`** — identity `order_id`, which is **Phoenix's own identity** (conceptually `orderLinkId`), never `exchange_order_id` — Phoenix cannot assert in advance what id the exchange will assign to an order that doesn't exist remotely yet. Fields: `order_id`, `symbol`, `side`, `order_type` (`"market"`/`"limit"`), `quantity` (`Decimal`, finite, `> 0`), `price` (`Decimal | None`, finite, `> 0` when present — **not** coupled to `order_type`, following `ExecutionOpenOrder`'s Hito 3.71 observational precedent rather than the write-side `ExecutionRequest`'s stricter coupling), `reduce_only` (strict `bool`). Deliberately without `exchange_order_id`/`filled_quantity`/`status`/`server_time`/`bot_id`/`strategy_id` — dynamic execution-progress fields are excluded so a future Reconciliation Engine can't confuse legitimate fill progress with divergence; their semantics are for that future hito, not this one.
+
+**`ExpectedExecutionState`** — `scope` + `positions: tuple[ExpectedPosition, ...]` + `open_orders: tuple[ExpectedOpenOrder, ...]`. Invariants enforced in `__post_init__`: every position/order symbol must belong to `scope` (fail-closed — an out-of-scope expectation invalidates construction, never silently dropped); no duplicate `(symbol, side)` among positions; no duplicate `order_id` among orders (two economically-identical orders with different `order_id` **survive** — identity is `order_id` alone); `BUY`/`SELL` of the same symbol coexist (hedge, same principle as Positions Read). Empty `positions`/`open_orders` within a non-empty `scope` is valid and means *expected absence* — not "no opinion."
+
+**Not implemented, on purpose:** no `ExpectedExecutionState.reconcile(snapshot)`, no `ExchangeStateSnapshot.compare(expected)` — verified by AST that the module doesn't import `ExchangeStateSnapshot` and contains no reconciliation vocabulary (`reconcile`/`MATCH`/`MISSING`/`UNEXPECTED`/`MISMATCH`/`repair`) as real code (only legitimate explanatory prose). No persistence, no Canonical Execution Ledger, no projection engine that populates a real `ExpectedExecutionState` from bots/intents — this hito defines the vocabulary only. See ADR-004 for the full architectural reasoning, including why the scope-empty and `price` decisions were resolved from precedent rather than by intuition.
