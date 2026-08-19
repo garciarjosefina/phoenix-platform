@@ -50,13 +50,17 @@ Phoenix
 │       └── Exchange State Snapshot      (Hito 3.74 — ACCEPTED)
 │           Aggregates the four account-wide reads above. See §6.
 │
-├── Expected Execution State             [IMPLEMENTED — domain contracts only, no Port]
-│   (Hito 3.76 — pending independent adversarial audit, not yet accepted)
+├── Expected Execution State             [IMPLEMENTED, ACCEPTED — domain contracts only, no Port]
+│   (Hito 3.76 — accepted after correction + final independent adversarial audit)
 │   Pure immutable vocabulary for "what execution state Phoenix
 │   asserts should exist" within an explicit scope. NOT a Reconciliation
 │   Engine, not wired to ExchangeStateSnapshot. See §13.
 │
-├── Future: Reconciliation Engine        [NOT YET IMPLEMENTED — no code, no Port]
+├── Reconciliation Engine V1             [IMPLEMENTED — pending independent adversarial audit]
+│   (Hito 3.77 — Detection & Classification only, explicitly NO repair)
+│   Pure function reconcile_execution_state(expected, observed) ->
+│   ReconciliationResult. No Port, no I/O, no persistence. See §14.
+│
 ├── Future: Market Regime Engine         [NOT YET IMPLEMENTED]
 ├── Future: Portfolio Orchestrator       [NOT YET IMPLEMENTED]
 ├── Future: Bot SDK                      [NOT YET IMPLEMENTED]
@@ -181,7 +185,8 @@ Domain-facing Port method (execute() / query_*())
 | Wallet Balance Read | 291+30 tests | 15/16 (13/14 correction) | NOT REAL-VALIDATED | ACCEPTED (Hito 3.72) |
 | Instrument Metadata Read | 347+5 tests | 19/20 (5/5 correction) | NOT REAL-VALIDATED | ACCEPTED (Hito 3.73) |
 | Exchange State Snapshot | 173+9 tests | 14/16 aggregate + 8/8 config-coherence | NOT REAL-VALIDATED | ACCEPTED (Hito 3.74) |
-| Expected Execution State (contracts only) | 137 tests | 24/24 detected | N/A — pure domain contracts, no I/O | PENDING RE-AUDIT (Hito 3.76, corrected, not yet accepted) |
+| Expected Execution State (contracts only) | 137 tests | 24/24 + 13/13 re-verified independently | N/A — pure domain contracts, no I/O | ACCEPTED (Hito 3.76) |
+| Reconciliation Engine V1 (Detection & Classification) | 102 tests | 23/24 detected, 1 confirmed equivalent | N/A — pure function, no I/O | PENDING AUDIT (Hito 3.77, not yet accepted) |
 
 **The single most important line in this table:** the only real-Bybit validation ever performed in this project's history is the authenticated GET connectivity smoke test (Hito 3.68). Every read-side primitive built since — including `ExchangeStateSnapshot` — is validated exclusively by offline tests against mocked HTTP responses. Do not describe any of them as "validated against Bybit" without qualifying "in tests, not in production."
 
@@ -204,20 +209,21 @@ Active as of this document's last update — verify each against `docs/decisions
 
 ## 12. Next architectural boundary
 
-**A Reconciliation Engine** is the direction implied by `ExchangeStateSnapshot`'s design (observation without action, drift measured but not judged) and by the explicit "future Reconciliation Engine" references throughout `docs/decisions.md` (ADR-002 and its Hito 3.72/3.74 updates, and the "Advertencia de no-atomicidad" note under the post-3.72 correction). It has **not been designed or started** — no Port, no contract, no code exists for it, and **its scope has not been decided**. In particular, `docs/decisions.md` does not establish whether it is detection-only or whether it may also take repair actions — do not assume either. Before it can be built, at minimum the following are undecided and must be resolved as their own hito(s), not assumed:
+A **Reconciliation Engine V1** now exists (Hito 3.77, pending independent adversarial audit — see §14) as the direction implied by `ExchangeStateSnapshot`'s design (observation without action, drift measured but not judged) and the explicit "future Reconciliation Engine" references throughout `docs/decisions.md`. V1 is deliberately narrow — **Detection & Classification only, explicitly no repair**. Of the items previously listed here as undecided:
 
-- ~~What "expected/desired state" means and where it comes from~~ — **resolved by Hito 3.76**: see §13, `ExpectedExecutionState`. Note this only defines the vocabulary; it does not decide how a real `ExpectedExecutionState` gets *populated* for a live account (that's a future projection engine, still undecided).
-- Identity matching between observed and expected entities
-- A drift-tolerance policy (deliberately not decided by `ExchangeStateSnapshot`)
-- Mismatch classification
-- Stale-round rejection rules
-- Whether the engine is detection-only or may also take repair actions — undecided, not to be assumed either way
+- ~~What "expected/desired state" means and where it comes from~~ — **resolved by Hito 3.76**: see §13, `ExpectedExecutionState`. Still undecided: how a real `ExpectedExecutionState` gets *populated* for a live account (a future projection engine).
+- ~~Identity matching between observed and expected entities~~ — **resolved by Hito 3.77**: see §14. Positions by `(symbol, side)`; orders by Phoenix `order_id` only, identity-first/scope-second.
+- ~~Mismatch classification~~ — **resolved by Hito 3.77**: eleven closed `Divergence` types, see §14.
+- **A drift-tolerance policy** — still not decided. `ObservationWindow` is preserved in `ReconciliationResult` (§14) but V1 does not judge it.
+- **Stale-round rejection rules** — still not decided; same reason.
+- **Whether the engine (beyond V1) may also take repair actions** — still undecided. V1 itself contains zero repair-shaped code (verified by AST — no `cancel`/`repair`/`remediate`/`create_order`/`close_position`/`resize` as real identifiers), but that doesn't settle whether a future version will add it.
+- **Account identity** — new item, carried over from ADR-004's MENOR-3: neither `ExpectedExecutionState` nor `ExchangeStateSnapshot` carries account identity; `reconcile_execution_state` presupposes (does not validate) that both inputs belong to the same account/configuration. Any fix must be symmetric and additive to both sides, not patched onto one.
 
 ---
 
-## 13. Expected Execution State (Hito 3.76 — corrected, pending final independent adversarial audit)
+## 13. Expected Execution State (Hito 3.76 — ACCEPTED)
 
-Four immutable domain contracts in `expected_execution_state_contracts.py` — pure vocabulary, no Port, no HTTP, no I/O, no Reconciliation Engine, no wiring to `ExchangeStateSnapshot`. Not yet accepted; do not treat as a stable public contract until an independent audit closes it (see `docs/progress.md`).
+Four immutable domain contracts in `expected_execution_state_contracts.py` — pure vocabulary, no Port, no HTTP, no I/O, no Reconciliation Engine, no wiring to `ExchangeStateSnapshot`.
 
 **Exact string identity, no silent normalization — behaviorally tested.** `symbol` and `order_id` are never `strip()`/`upper()`/`lower()`'d anywhere in this module, consistent with the observed read-side (`bybit_positions_response_interpreter.py`/`bybit_open_orders_response_interpreter.py` don't normalize either). `"BTCUSDT"`, `"btcusdt"`, `" BTCUSDT "` are distinct values, preserved exactly, and scope containment/deduplication are case- and whitespace-sensitive (`TestExactStringIdentityNoNormalization`, added in the post-3.76 correction after an audit found this property held in production but was uncovered by tests).
 
@@ -234,3 +240,39 @@ Four immutable domain contracts in `expected_execution_state_contracts.py` — p
 **Two debts registered explicitly for the Reconciliation Engine hito, deliberately not resolved here:**
 - **`price` semantics are under-specified.** `ExpectedOpenOrder` currently allows `order_type="limit"` with `price=None` and `order_type="market"` with `price>0` — deliberately, not by oversight (see ADR-004). This does **not** mean either combination is operationally meaningful. Before comparing `price` against `ExecutionOpenOrder`, the Reconciliation Engine must explicitly define the semantics of: `expected.price is None`, `observed.price is None`, a market order with an observed/expected price, and a limit order expected without a price.
 - **No timestamp/freshness on `ExpectedExecutionState`, and no account identity on either `ExpectedExecutionState` or `ExchangeStateSnapshot`.** Both are acceptable today (no ledger/projection engine exists to populate a real timestamp; nothing yet compares two accounts against each other), but both need a decision before/during the Reconciliation Engine hito — the account-identity gap in particular must be closed **symmetrically and additively on both sides**, not patched onto `ExpectedExecutionState` alone.
+
+---
+
+## 14. Reconciliation Engine V1 (Hito 3.77 — pending independent adversarial audit)
+
+`reconcile_execution_state(*, expected: ExpectedExecutionState, observed: ExchangeStateSnapshot) -> ReconciliationResult` — a pure module function in `reconciliation_engine.py`, not a Port, no I/O. Not yet accepted; do not treat as a stable public contract until an independent audit closes it (see `docs/progress.md`).
+
+**Scope: Detection & Classification only.** No repair, no cancellation, no order creation, no position closing, no SL/TP/leverage/margin changes, no sizing, no capital allocation, no persistence, no ledger. Verified by AST that the module contains none of `cancel`/`repair`/`remediate`/`create_order`/`close_position`/`resize` as real code (class/function/attribute names) — only as legitimate explanatory prose is any of that vocabulary permitted.
+
+**Purity.** Same style as the rest of `execution_gateway`: `reconciliation_engine.py` imports only `exchange_state_contracts`, `expected_execution_state_contracts`, `reconciliation_contracts`, `reconciliation_precondition_error` — zero Bybit/HTTP/urllib/os/Railway. Same inputs always produce the same `ReconciliationResult`, including divergence order — no local clock, no network, no environment reads, no mutable global state.
+
+**Position identity: `(symbol, side)`, matched only within `expected.scope`.** Same principle as `ExpectedPosition`/`ExecutionPosition`. A position observed outside `expected.scope.symbols` is never classified `UnexpectedExchangePosition` — Phoenix has no authority to assert anything about it. String identity is exact — no `strip()`/`upper()`/`lower()` anywhere in matching.
+
+**Order identity: Phoenix `order_id` only — `exchange_order_id` never participates in matching, not even as a fallback.** `ExpectedOpenOrder.order_id` matches exclusively against `ExecutionOpenOrder.order_id`. An orphan order (`order_id is None`) whose `exchange_order_id` happens to coincide with some expected order's Phoenix `order_id` must never be treated as matched — verified with a dedicated mutation and test.
+
+**Identity-first, scope-second — the central rule for orders.** Order matching runs in two strictly sequential phases:
+1. Walk `expected.open_orders`, look up each `order_id` among observed orders — **scope does not participate here**. A matched order can produce multiple field-level divergences (including `OrderSymbolMismatch` if the observed symbol falls outside `expected.scope`) without ever being reclassified as missing/unexpected — identity matching already established it's the same entity.
+2. Walk the observed orders **not** matched in phase 1 — only here does scope decide whether to report as unexpected/unattributed or ignore.
+
+Four required scenarios, each with a dedicated test and independent mutation coverage: a matched order whose observed symbol falls outside scope still produces `OrderSymbolMismatch` (never ignored, never split into missing+unexpected); an unmatched order outside scope is ignored; an orphan outside scope is ignored; an orphan inside scope becomes `UnattributedExchangeOpenOrder`.
+
+**Orphan orders (`order_id is None`).** An observed order without Phoenix identity (`exchange_order_id` always present) is classified `UnattributedExchangeOpenOrder` if its symbol is within `expected.scope`, or ignored otherwise. No `order_id` is ever invented; `exchange_order_id` is never substituted as Phoenix identity.
+
+**Eleven divergence types, no free strings.** `Divergence` is a non-instantiable marker base class; eleven concrete `frozen` dataclasses subclass it — three for positions (`MissingExpectedPosition`, `UnexpectedExchangePosition`, `PositionQuantityMismatch`), eight for orders (`MissingExpectedOpenOrder`, `UnexpectedExchangeOpenOrder`, `UnattributedExchangeOpenOrder`, `OrderSymbolMismatch`, `OrderSideMismatch`, `OrderQuantityMismatch`, `OrderTypeMismatch`, `OrderPriceMismatch`). Classification is the Python type itself (`isinstance`), never a free string or generic `Literal` tag. There is no `PositionSymbolMismatch`/`PositionSideMismatch` — a position's identity **is** `(symbol, side)`, so once matched it can only diverge on `quantity`.
+
+**`ReconciliationResult`: `is_in_sync` is a `@property`, never a second field.** `divergences: tuple[Divergence, ...]` is the sole source of truth; `is_in_sync` is derived on every access (`len(divergences) == 0`) — no stored boolean that could, through a construction bug, contradict the actual divergence list. `observation_window` is preserved verbatim from the observed `ExchangeStateSnapshot` — the caller knows which window produced these divergences, but V1 makes no freshness/staleness judgment.
+
+**`price` semantics V1 — closes ADR-004's MENOR-1.** A `ReconciliationPreconditionError` (pure domain exception, not infrastructure — this component does no I/O) aborts, before any matching, if any expected `order_type="limit"` has `price=None` — fail-closed, `None` is never interpreted as "no opinion" or zero. For an expected `market` order, price is **not** part of the V1-reconcilable expectation — `OrderPriceMismatch` is never emitted for a `market`-expected order on price grounds alone, even if `expected.price` happens to be populated (permissive semantics inherited from 3.76, left untouched) or the observed price differs. For a matched `limit` order, comparison against `observed.price` is exact (including `observed.price is None` → `OrderPriceMismatch`). The gate is always `expected.order_type`, never `observed.order_type` — a type mismatch between the two is already reported separately as `OrderTypeMismatch`.
+
+**Partial fills: `expected.quantity` vs `observed.quantity`, never `remaining`.** A legitimate partial fill (`observed.filled_quantity > 0`) is never, by itself, a divergence — `OrderQuantityMismatch` always compares `expected.quantity` against `observed.quantity` (the order's original size), never `observed.quantity - observed.filled_quantity`. Observed `status` never produces a divergence on its own in V1.
+
+**No freshness policy, no account identity — both explicitly presupposed, not validated.** `reconcile_execution_state` assumes `expected` and `observed` belong to the same account/configuration; it cannot validate this (neither contract carries account identity yet — ADR-004's MENOR-3, still open). `ObservationWindow` is carried through for the caller's benefit, but V1 does not decide what counts as "too old."
+
+**Determinism.** `set`/`dict` are used exclusively as internal lookup structures (scope membership, identity indexing) — never as a source of output ordering. Divergence order: (1) `expected.positions` in contractual order, (2) `observed.positions.positions` in contractual order for the unmatched remainder, (3) `expected.open_orders` in contractual order (missing, or matched with mismatches in the fixed field order symbol→side→quantity→order_type→price), (4) `observed.open_orders.orders` in contractual order for the unmatched remainder.
+
+**Mutation battery: 24 specified, 23 detected, 1 confirmed equivalent.** M9 ("a matched order with symbol outside scope is ignored") is equivalent: `ExpectedExecutionState.__post_init__` (Hito 3.76's own invariant) already structurally rejects any `ExpectedOpenOrder.symbol` outside its own `scope` — verified by directly constructing that invalid state and confirming the `ValueError`. The mutated branch is unreachable dead code given that precondition.
