@@ -595,6 +595,162 @@ class TestExpectedExecutionState:
 
 
 # ---------------------------------------------------------------------------
+# Identidad exacta de strings -- sin normalización silenciosa.
+#
+# Hallazgo IMPORTANTE-1 de la auditoría adversarial independiente del
+# Hito 3.76: producción HOY es correcta (no hace strip/upper/lower en
+# ningún campo), pero nada en la suite lo aseveraba conductualmente --
+# cuatro mutantes que introducían normalización silenciosa (símbolo,
+# order_id, comparación de duplicados) sobrevivían. Estos tests fijan
+# la semántica actual: identidad de string EXACTA en todo el contrato,
+# consistente con que el read-side observado (bybit_positions_response_
+# interpreter.py / bybit_open_orders_response_interpreter.py) tampoco
+# normaliza -- ambos lados del futuro Reconciliation Engine deben
+# seguir siendo simétricos en este eje.
+# ---------------------------------------------------------------------------
+
+class TestExactStringIdentityNoNormalization:
+    # ── scope: símbolos con distinto casing/espacios son valores distintos ──
+
+    def test_scope_different_case_symbols_are_distinct_and_both_valid(self):
+        # Mata M21 (symbol.strip().upper() en scope) y M28 (duplicate
+        # detection case-insensitive): si cualquiera de las dos
+        # mutaciones estuviera aplicada, esto lanzaría "duplicate
+        # symbol" en vez de construir con 2 elementos.
+        scope = _scope(symbols=("BTCUSDT", "btcusdt"))
+        assert scope.symbols == ("BTCUSDT", "btcusdt")
+        assert len(scope.symbols) == 2
+
+    def test_scope_whitespace_padded_symbol_preserved_exactly(self):
+        scope = _scope(symbols=(" BTCUSDT ",))
+        assert scope.symbols == (" BTCUSDT ",)
+
+    def test_scope_trailing_space_and_bare_symbol_are_distinct(self):
+        scope = _scope(symbols=("BTCUSDT", "BTCUSDT "))
+        assert scope.symbols == ("BTCUSDT", "BTCUSDT ")
+        assert len(scope.symbols) == 2
+
+    def test_scope_duplicate_detection_is_case_sensitive(self):
+        # Control positivo: el MISMO string sí sigue siendo rechazado --
+        # esto no es una relajación general de la deduplicación.
+        with pytest.raises(ValueError, match="duplicate symbol"):
+            _scope(symbols=("BTCUSDT", "BTCUSDT"))
+
+    # ── ExpectedPosition.symbol: sin upper/strip ────────────────────────
+
+    def test_position_lowercase_symbol_preserved(self):
+        # Mata M31 (ExpectedPosition.symbol = symbol.upper()).
+        position = _position(symbol="btcusdt")
+        assert position.symbol == "btcusdt"
+
+    def test_position_whitespace_padded_symbol_preserved(self):
+        position = _position(symbol=" BTCUSDT ")
+        assert position.symbol == " BTCUSDT "
+
+    # ── ExpectedOpenOrder.symbol: sin upper/strip ───────────────────────
+
+    def test_order_lowercase_symbol_preserved(self):
+        order = _order(symbol="btcusdt")
+        assert order.symbol == "btcusdt"
+
+    def test_order_whitespace_padded_symbol_preserved(self):
+        # Mata M32 (ExpectedOpenOrder.symbol = symbol.strip()).
+        order = _order(symbol=" BTCUSDT ")
+        assert order.symbol == " BTCUSDT "
+
+    # ── order_id: identidad exacta ──────────────────────────────────────
+
+    def test_order_id_different_case_are_distinct_values(self):
+        order_upper = _order(order_id="ORDER-1")
+        order_lower = _order(order_id="order-1")
+        assert order_upper.order_id == "ORDER-1"
+        assert order_lower.order_id == "order-1"
+        assert order_upper.order_id != order_lower.order_id
+
+    def test_order_id_whitespace_padded_preserved_exactly(self):
+        # Mata M20 (order_id = order_id.strip()). Distinto de
+        # order_id="   " (whitespace-only), que sigue rechazado --
+        # ver test_order_id_whitespace_only_still_rejected.
+        order = _order(order_id=" ORDER-1 ")
+        assert order.order_id == " ORDER-1 "
+
+    def test_order_id_whitespace_only_still_rejected(self):
+        # Control positivo: no se relaja el rechazo de whitespace-only,
+        # sólo se protege que un id CON contenido no se recorte.
+        with pytest.raises(ValueError, match="order_id must not be empty"):
+            _order(order_id="   ")
+
+    def test_two_orders_case_variant_order_ids_both_survive(self):
+        # Mata M34 (duplicate order_id detection case-insensitive).
+        state = _state(
+            scope=_scope(symbols=("BTCUSDT",)),
+            open_orders=(_order(order_id="ORDER-1"), _order(order_id="order-1")),
+        )
+        assert len(state.open_orders) == 2
+
+    def test_two_orders_whitespace_variant_order_ids_both_survive(self):
+        # Mata M35 (duplicate order_id detection strip-aware).
+        state = _state(
+            scope=_scope(symbols=("BTCUSDT",)),
+            open_orders=(_order(order_id="ORDER-1"), _order(order_id=" ORDER-1 ")),
+        )
+        assert len(state.open_orders) == 2
+
+    # ── containment: comparación exacta, no case/whitespace-insensitive ──
+
+    def test_position_different_case_symbol_rejected_as_out_of_scope(self):
+        # Mata M33 (scope membership comparison case-insensitive): si
+        # la comparación fuera case-insensitive, "btcusdt" pasaría
+        # contra scope=("BTCUSDT",).
+        with pytest.raises(ValueError, match="not in scope"):
+            _state(
+                scope=_scope(symbols=("BTCUSDT",)),
+                positions=(_position(symbol="btcusdt"),),
+            )
+
+    def test_position_whitespace_padded_symbol_rejected_as_out_of_scope(self):
+        with pytest.raises(ValueError, match="not in scope"):
+            _state(
+                scope=_scope(symbols=("BTCUSDT",)),
+                positions=(_position(symbol=" BTCUSDT "),),
+            )
+
+    def test_order_different_case_symbol_rejected_as_out_of_scope(self):
+        with pytest.raises(ValueError, match="not in scope"):
+            _state(
+                scope=_scope(symbols=("BTCUSDT",)),
+                open_orders=(_order(symbol="btcusdt"),),
+            )
+
+    def test_order_whitespace_padded_symbol_rejected_as_out_of_scope(self):
+        with pytest.raises(ValueError, match="not in scope"):
+            _state(
+                scope=_scope(symbols=("BTCUSDT",)),
+                open_orders=(_order(symbol=" BTCUSDT "),),
+            )
+
+    def test_position_exact_case_match_against_lowercase_scope_valid(self):
+        # Control positivo: coincidencia EXACTA (incluido casing) sigue
+        # funcionando -- containment no está simplemente roto.
+        state = _state(
+            scope=_scope(symbols=("btcusdt",)),
+            positions=(_position(symbol="btcusdt"),),
+        )
+        assert len(state.positions) == 1
+
+    # ── MARKET + price>0: valor preservado, sin conversión silenciosa ───
+
+    def test_market_order_with_positive_price_preserves_value_exactly(self):
+        # Mata M19 (MARKET + price>0 convertido silenciosamente a None).
+        # Nota: esto fija el comportamiento ACTUAL del contrato -- no
+        # decide si esta semántica es la ideal para un futuro
+        # Reconciliation Engine (ver MENOR-1, docs/decisions.md ADR-004).
+        order = _order(order_type="market", price=Decimal("50000"))
+        assert order.order_type == "market"
+        assert order.price == Decimal("50000")
+
+
+# ---------------------------------------------------------------------------
 # Pureza de dominio (AST)
 # ---------------------------------------------------------------------------
 
