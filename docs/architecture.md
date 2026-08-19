@@ -181,7 +181,7 @@ Domain-facing Port method (execute() / query_*())
 | Wallet Balance Read | 291+30 tests | 15/16 (13/14 correction) | NOT REAL-VALIDATED | ACCEPTED (Hito 3.72) |
 | Instrument Metadata Read | 347+5 tests | 19/20 (5/5 correction) | NOT REAL-VALIDATED | ACCEPTED (Hito 3.73) |
 | Exchange State Snapshot | 173+9 tests | 14/16 aggregate + 8/8 config-coherence | NOT REAL-VALIDATED | ACCEPTED (Hito 3.74) |
-| Expected Execution State (contracts only) | 118 tests | 15/15 detected | N/A — pure domain contracts, no I/O | PENDING AUDIT (Hito 3.76, not yet accepted) |
+| Expected Execution State (contracts only) | 137 tests | 24/24 detected | N/A — pure domain contracts, no I/O | PENDING RE-AUDIT (Hito 3.76, corrected, not yet accepted) |
 
 **The single most important line in this table:** the only real-Bybit validation ever performed in this project's history is the authenticated GET connectivity smoke test (Hito 3.68). Every read-side primitive built since — including `ExchangeStateSnapshot` — is validated exclusively by offline tests against mocked HTTP responses. Do not describe any of them as "validated against Bybit" without qualifying "in tests, not in production."
 
@@ -215,9 +215,11 @@ Active as of this document's last update — verify each against `docs/decisions
 
 ---
 
-## 13. Expected Execution State (Hito 3.76 — pending independent adversarial audit)
+## 13. Expected Execution State (Hito 3.76 — corrected, pending final independent adversarial audit)
 
 Four immutable domain contracts in `expected_execution_state_contracts.py` — pure vocabulary, no Port, no HTTP, no I/O, no Reconciliation Engine, no wiring to `ExchangeStateSnapshot`. Not yet accepted; do not treat as a stable public contract until an independent audit closes it (see `docs/progress.md`).
+
+**Exact string identity, no silent normalization — behaviorally tested.** `symbol` and `order_id` are never `strip()`/`upper()`/`lower()`'d anywhere in this module, consistent with the observed read-side (`bybit_positions_response_interpreter.py`/`bybit_open_orders_response_interpreter.py` don't normalize either). `"BTCUSDT"`, `"btcusdt"`, `" BTCUSDT "` are distinct values, preserved exactly, and scope containment/deduplication are case- and whitespace-sensitive (`TestExactStringIdentityNoNormalization`, added in the post-3.76 correction after an audit found this property held in production but was uncovered by tests).
 
 **`ExpectedExecutionScope`** — `symbols: tuple[str, ...]`, no duplicates. Defines *where* the state is authoritative. A symbol outside `scope` is **unknown** (Phoenix asserts nothing) — never "expected flat." An empty scope (`symbols=()`) is valid, by the same precedent as every other collection field in the read-side (empty = legitimate, never an error).
 
@@ -228,3 +230,7 @@ Four immutable domain contracts in `expected_execution_state_contracts.py` — p
 **`ExpectedExecutionState`** — `scope` + `positions: tuple[ExpectedPosition, ...]` + `open_orders: tuple[ExpectedOpenOrder, ...]`. Invariants enforced in `__post_init__`: every position/order symbol must belong to `scope` (fail-closed — an out-of-scope expectation invalidates construction, never silently dropped); no duplicate `(symbol, side)` among positions; no duplicate `order_id` among orders (two economically-identical orders with different `order_id` **survive** — identity is `order_id` alone); `BUY`/`SELL` of the same symbol coexist (hedge, same principle as Positions Read). Empty `positions`/`open_orders` within a non-empty `scope` is valid and means *expected absence* — not "no opinion."
 
 **Not implemented, on purpose:** no `ExpectedExecutionState.reconcile(snapshot)`, no `ExchangeStateSnapshot.compare(expected)` — verified by AST that the module doesn't import `ExchangeStateSnapshot` and contains no reconciliation vocabulary (`reconcile`/`MATCH`/`MISSING`/`UNEXPECTED`/`MISMATCH`/`repair`) as real code (only legitimate explanatory prose). No persistence, no Canonical Execution Ledger, no projection engine that populates a real `ExpectedExecutionState` from bots/intents — this hito defines the vocabulary only. See ADR-004 for the full architectural reasoning, including why the scope-empty and `price` decisions were resolved from precedent rather than by intuition.
+
+**Two debts registered explicitly for the Reconciliation Engine hito, deliberately not resolved here:**
+- **`price` semantics are under-specified.** `ExpectedOpenOrder` currently allows `order_type="limit"` with `price=None` and `order_type="market"` with `price>0` — deliberately, not by oversight (see ADR-004). This does **not** mean either combination is operationally meaningful. Before comparing `price` against `ExecutionOpenOrder`, the Reconciliation Engine must explicitly define the semantics of: `expected.price is None`, `observed.price is None`, a market order with an observed/expected price, and a limit order expected without a price.
+- **No timestamp/freshness on `ExpectedExecutionState`, and no account identity on either `ExpectedExecutionState` or `ExchangeStateSnapshot`.** Both are acceptable today (no ledger/projection engine exists to populate a real timestamp; nothing yet compares two accounts against each other), but both need a decision before/during the Reconciliation Engine hito — the account-identity gap in particular must be closed **symmetrically and additively on both sides**, not patched onto `ExpectedExecutionState` alone.
