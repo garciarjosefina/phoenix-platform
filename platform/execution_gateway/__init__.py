@@ -158,6 +158,23 @@ from execution_gateway.expected_execution_state_contracts import (
     ExpectedOpenOrder,
     ExpectedExecutionState,
 )
+from execution_gateway.reconciliation_precondition_error import ReconciliationPreconditionError
+from execution_gateway.reconciliation_contracts import (
+    Divergence,
+    MissingExpectedPosition,
+    UnexpectedExchangePosition,
+    PositionQuantityMismatch,
+    MissingExpectedOpenOrder,
+    UnexpectedExchangeOpenOrder,
+    UnattributedExchangeOpenOrder,
+    OrderSymbolMismatch,
+    OrderSideMismatch,
+    OrderQuantityMismatch,
+    OrderTypeMismatch,
+    OrderPriceMismatch,
+    ReconciliationResult,
+)
+from execution_gateway.reconciliation_engine import reconcile_execution_state
 
 __all__ = [
     "__version__",
@@ -285,4 +302,19 @@ __all__ = [
     "ExpectedPosition",
     "ExpectedOpenOrder",
     "ExpectedExecutionState",
+    "ReconciliationPreconditionError",
+    "Divergence",
+    "MissingExpectedPosition",
+    "UnexpectedExchangePosition",
+    "PositionQuantityMismatch",
+    "MissingExpectedOpenOrder",
+    "UnexpectedExchangeOpenOrder",
+    "UnattributedExchangeOpenOrder",
+    "OrderSymbolMismatch",
+    "OrderSideMismatch",
+    "OrderQuantityMismatch",
+    "OrderTypeMismatch",
+    "OrderPriceMismatch",
+    "ReconciliationResult",
+    "reconcile_execution_state",
 ]
