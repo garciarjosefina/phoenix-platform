@@ -56,7 +56,7 @@ Phoenix
 │   asserts should exist" within an explicit scope. NOT a Reconciliation
 │   Engine, not wired to ExchangeStateSnapshot. See §13.
 │
-├── Reconciliation Engine V1             [IMPLEMENTED — pending independent adversarial audit]
+├── Reconciliation Engine V1             [ACCEPTED]
 │   (Hito 3.77 — Detection & Classification only, explicitly NO repair)
 │   Pure function reconcile_execution_state(expected, observed) ->
 │   ReconciliationResult. No Port, no I/O, no persistence. See §14.
@@ -186,7 +186,7 @@ Domain-facing Port method (execute() / query_*())
 | Instrument Metadata Read | 347+5 tests | 19/20 (5/5 correction) | NOT REAL-VALIDATED | ACCEPTED (Hito 3.73) |
 | Exchange State Snapshot | 173+9 tests | 14/16 aggregate + 8/8 config-coherence | NOT REAL-VALIDATED | ACCEPTED (Hito 3.74) |
 | Expected Execution State (contracts only) | 137 tests | 24/24 + 13/13 re-verified independently | N/A — pure domain contracts, no I/O | ACCEPTED (Hito 3.76) |
-| Reconciliation Engine V1 (Detection & Classification) | 123 tests (102 + 21 correction) | 24/24 detected, 0 equivalent + 12/12 N1-N12 correction | N/A — pure function, no I/O | CORRECTED, PENDING FINAL RE-AUDIT (Hito 3.77, not yet accepted) |
+| Reconciliation Engine V1 (Detection & Classification) | 123 tests (102 + 21 correction) | 24/24 + 12/12 N1-N12 detected (implementer) + 53/53 probes + 13/13 (M28+N1-N12) reinjected independently + 4000-trial invariant search, 0 violations (auditor) | N/A — pure function, no I/O | ACCEPTED (Hito 3.77) |
 
 **The single most important line in this table:** the only real-Bybit validation ever performed in this project's history is the authenticated GET connectivity smoke test (Hito 3.68). Every read-side primitive built since — including `ExchangeStateSnapshot` — is validated exclusively by offline tests against mocked HTTP responses. Do not describe any of them as "validated against Bybit" without qualifying "in tests, not in production."
 
@@ -209,7 +209,7 @@ Active as of this document's last update — verify each against `docs/decisions
 
 ## 12. Next architectural boundary
 
-A **Reconciliation Engine V1** now exists (Hito 3.77, corrected after an independent adversarial audit — see §14; pending final re-audit) as the direction implied by `ExchangeStateSnapshot`'s design (observation without action, drift measured but not judged) and the explicit "future Reconciliation Engine" references throughout `docs/decisions.md`. V1 is deliberately narrow — **Detection & Classification only, explicitly no repair**. Of the items previously listed here as undecided:
+A **Reconciliation Engine V1** now exists and is **accepted** (Hito 3.77, corrected after an independent adversarial audit and confirmed by a final independent adversarial re-audit — see §14) as the direction implied by `ExchangeStateSnapshot`'s design (observation without action, drift measured but not judged) and the explicit "future Reconciliation Engine" references throughout `docs/decisions.md`. V1 is deliberately narrow — **Detection & Classification only, explicitly no repair** — and is now a congealed accepted foundation, not a component under active development. Of the items previously listed here as undecided:
 
 - ~~What "expected/desired state" means and where it comes from~~ — **resolved by Hito 3.76**: see §13, `ExpectedExecutionState`. Still undecided: how a real `ExpectedExecutionState` gets *populated* for a live account (a future projection engine).
 - ~~Identity matching between observed and expected entities~~ — **resolved by Hito 3.77**: see §14. Positions by `(symbol, side)`; orders by Phoenix `order_id` only, identity-first/scope-second.
@@ -218,6 +218,8 @@ A **Reconciliation Engine V1** now exists (Hito 3.77, corrected after an indepen
 - **Stale-round rejection rules** — still not decided; same reason.
 - **Whether the engine (beyond V1) may also take repair actions** — still undecided. V1 itself contains zero repair-shaped code (verified by AST — no `cancel`/`repair`/`remediate`/`create_order`/`close_position`/`resize` as real identifiers), but that doesn't settle whether a future version will add it.
 - **Account identity** — new item, carried over from ADR-004's MENOR-3: neither `ExpectedExecutionState` nor `ExchangeStateSnapshot` carries account identity; `reconcile_execution_state` presupposes (does not validate) that both inputs belong to the same account/configuration. Any fix must be symmetric and additive to both sides, not patched onto one.
+
+**With V1 accepted, the next unit of work is design of these three open items — not an implementation of repair.** No `RepairEngine`/`RepairPolicy` exists anywhere in this codebase, and none should be built until drift-tolerance/staleness, account identity, and the authority/boundaries of a future repair action are explicitly decided. Any repair design must also account for the documented coexistence of `OrderTypeMismatch` and `OrderPriceMismatch` on the same `order_id` (§14) — never act on an isolated `OrderPriceMismatch` without checking for a coexisting `OrderTypeMismatch` first.
 
 ---
 
@@ -243,9 +245,9 @@ Four immutable domain contracts in `expected_execution_state_contracts.py` — p
 
 ---
 
-## 14. Reconciliation Engine V1 (Hito 3.77 — corrected, pending final adversarial re-audit)
+## 14. Reconciliation Engine V1 (Hito 3.77 — ACCEPTED)
 
-`reconcile_execution_state(*, expected: ExpectedExecutionState, observed: ExchangeStateSnapshot) -> ReconciliationResult` — a pure module function in `reconciliation_engine.py`, not a Port, no I/O. Not yet accepted; do not treat as a stable public contract until an independent audit closes it (see `docs/progress.md`). An independent adversarial audit classified `CORREGIR HITO 3.77` (two IMPORTANTE findings, one MENOR); the correction described below closed all three and is itself pending final re-audit.
+`reconcile_execution_state(*, expected: ExpectedExecutionState, observed: ExchangeStateSnapshot) -> ReconciliationResult` — a pure module function in `reconciliation_engine.py`, not a Port, no I/O. **Accepted and stable** — treat this as the current public contract; see `docs/progress.md` for the full acceptance chain. An independent adversarial audit classified `CORREGIR HITO 3.77` (two IMPORTANTE findings, one MENOR); the correction described below closed all three, and a final independent adversarial re-audit (own probe harness, own reinjected mutations, a 4000-trial randomized invariant search, zero violations) confirmed `ACEPTAR HITO 3.77`. Detection & Classification only — it is a congealed accepted foundation, not a component under active development; see §12 for what is deliberately not decided yet.
 
 **Scope: Detection & Classification only.** No repair, no cancellation, no order creation, no position closing, no SL/TP/leverage/margin changes, no sizing, no capital allocation, no persistence, no ledger. Verified by AST that the module contains none of `cancel`/`repair`/`remediate`/`create_order`/`close_position`/`resize` as real code (class/function/attribute names) — only as legitimate explanatory prose is any of that vocabulary permitted.
 
