@@ -625,6 +625,245 @@ class TestPricePrecondition:
 
 
 # ---------------------------------------------------------------------------
+# Duplicate observed identities -- IMPORTANTE-1 de la auditoría adversarial
+# independiente del Hito 3.77: los contratos observados (PositionsSnapshot/
+# OpenOrdersSnapshot) no exigen unicidad de identidad -- sin esta
+# precondición, dos entidades observadas reales y distintas con la misma
+# identidad podían colapsar silenciosamente en el matching (dict), y en el
+# peor caso producir `is_in_sync=True` con una entidad real sin contabilizar.
+# V1 falla cerrado ante esta ambigüedad estructural del input observado, en
+# vez de elegir arbitrariamente "la primera"/"la última" o intentar
+# reconciliar dos observaciones contra una sola identidad esperada.
+# ---------------------------------------------------------------------------
+
+class TestDuplicateObservedIdentities:
+    # ── órdenes: duplicate Phoenix order_id ─────────────────────────────
+
+    def test_A_two_observed_orders_same_phoenix_order_id_fails_closed(self):
+        expected = _exp_state(scope=_scope(), open_orders=(_exp_order(order_id="PHX-1"),))
+        observed = _snapshot(orders=(
+            _obs_order(order_id="PHX-1", exchange_order_id="BYBIT-A"),
+            _obs_order(order_id="PHX-1", exchange_order_id="BYBIT-B"),
+        ))
+        with pytest.raises(ReconciliationPreconditionError, match="duplicate Phoenix order_id"):
+            _reconcile(expected, observed)
+
+    def test_B_one_matches_exactly_other_duplicates_id_still_fails_closed(self):
+        # El caso critico de la auditoria: una orden coincide
+        # perfectamente con expected, pero existe una SEGUNDA observada
+        # real con el mismo order_id -- antes de la correccion esto podia
+        # producir is_in_sync=True perdiendo la segunda orden.
+        expected = _exp_state(scope=_scope(), open_orders=(_exp_order(order_id="PHX-1", price=Decimal("100")),))
+        observed = _snapshot(orders=(
+            _obs_order(order_id="PHX-1", exchange_order_id="BYBIT-A", price=Decimal("100")),
+            _obs_order(order_id="PHX-1", exchange_order_id="BYBIT-B", price=Decimal("999")),
+        ))
+        with pytest.raises(ReconciliationPreconditionError):
+            _reconcile(expected, observed)
+
+    def test_C_duplicates_with_different_symbols_still_fails_closed(self):
+        expected = _exp_state(scope=_scope(symbols=("BTCUSDT", "ETHUSDT")),
+                               open_orders=(_exp_order(order_id="PHX-1", symbol="BTCUSDT"),))
+        observed = _snapshot(orders=(
+            _obs_order(order_id="PHX-1", exchange_order_id="BYBIT-A", symbol="BTCUSDT"),
+            _obs_order(order_id="PHX-1", exchange_order_id="BYBIT-B", symbol="ETHUSDT"),
+        ))
+        with pytest.raises(ReconciliationPreconditionError):
+            _reconcile(expected, observed)
+
+    def test_D_duplicate_outside_expected_scope_still_fails_closed(self):
+        # El scope decide autoridad ECONOMICA sobre que se reporta, no si
+        # el snapshot observado en si es estructuralmente valido -- una
+        # identidad Phoenix duplicada ya es ambigua antes de que el scope
+        # participe (identity-first).
+        expected = _exp_state(scope=_scope(symbols=("BTCUSDT",)), open_orders=())
+        observed = _snapshot(orders=(
+            _obs_order(order_id="PHX-Z", exchange_order_id="BYBIT-A", symbol="ETHUSDT"),
+            _obs_order(order_id="PHX-Z", exchange_order_id="BYBIT-B", symbol="ETHUSDT"),
+        ))
+        with pytest.raises(ReconciliationPreconditionError):
+            _reconcile(expected, observed)
+
+    def test_E_two_orphans_within_scope_both_reported_not_collapsed(self):
+        expected = _exp_state(scope=_scope())
+        observed = _snapshot(orders=(
+            _obs_order(order_id=None, exchange_order_id="BYBIT-A"),
+            _obs_order(order_id=None, exchange_order_id="BYBIT-B"),
+        ))
+        r = _reconcile(expected, observed)
+        assert len(r.divergences) == 2
+        assert all(isinstance(d, UnattributedExchangeOpenOrder) for d in r.divergences)
+        assert {d.exchange_order_id for d in r.divergences} == {"BYBIT-A", "BYBIT-B"}
+
+    def test_F_two_orphans_outside_scope_both_ignored(self):
+        expected = _exp_state(scope=_scope(symbols=("BTCUSDT",)))
+        observed = _snapshot(orders=(
+            _obs_order(order_id=None, exchange_order_id="BYBIT-A", symbol="ETHUSDT"),
+            _obs_order(order_id=None, exchange_order_id="BYBIT-B", symbol="ETHUSDT"),
+        ))
+        r = _reconcile(expected, observed)
+        assert r.is_in_sync
+
+    def test_G_same_exchange_order_id_different_phoenix_ids_not_duplicate(self):
+        # exchange_order_id nunca participa en la deteccion de duplicados
+        # Phoenix -- dos ordenes con order_id Phoenix DISTINTO no son
+        # ambiguas, aunque compartan (por error remoto hipotetico) el
+        # mismo exchange_order_id.
+        expected = _exp_state(scope=_scope(), open_orders=(
+            _exp_order(order_id="PHX-1"), _exp_order(order_id="PHX-2"),
+        ))
+        observed = _snapshot(orders=(
+            _obs_order(order_id="PHX-1", exchange_order_id="BYBIT-SAME"),
+            _obs_order(order_id="PHX-2", exchange_order_id="BYBIT-SAME"),
+        ))
+        r = _reconcile(expected, observed)
+        assert r.is_in_sync
+
+    # ── posiciones: duplicate (symbol, side) ────────────────────────────
+
+    def test_A_two_observed_positions_same_identity_fails_closed(self):
+        expected = _exp_state(scope=_scope())
+        observed = _snapshot(positions=(_obs_position(), _obs_position(quantity=Decimal("2"))))
+        with pytest.raises(ReconciliationPreconditionError, match="duplicate identity"):
+            _reconcile(expected, observed)
+
+    def test_B_expected_position_plus_two_duplicate_observed_fails_closed(self):
+        expected = _exp_state(scope=_scope(), positions=(_exp_position(),))
+        observed = _snapshot(positions=(_obs_position(), _obs_position(quantity=Decimal("2"))))
+        with pytest.raises(ReconciliationPreconditionError):
+            _reconcile(expected, observed)
+
+    def test_C_buy_and_sell_not_duplicate(self):
+        expected = _exp_state(
+            scope=_scope(),
+            positions=(_exp_position(side="buy"), _exp_position(side="sell", quantity=Decimal("2"))),
+        )
+        observed = _snapshot(positions=(_obs_position(side="buy"), _obs_position(side="sell", quantity=Decimal("2"))))
+        r = _reconcile(expected, observed)
+        assert r.is_in_sync
+
+    def test_D_duplicate_position_outside_scope_still_fails_closed(self):
+        expected = _exp_state(scope=_scope(symbols=("BTCUSDT",)))
+        observed = _snapshot(positions=(_obs_position(symbol="ETHUSDT"), _obs_position(symbol="ETHUSDT", quantity=Decimal("2"))))
+        with pytest.raises(ReconciliationPreconditionError):
+            _reconcile(expected, observed)
+
+    # ── identidad exacta también en la detección de duplicados ─────────
+
+    # Nota: _scope() por defecto sólo incluye symbols=("BTCUSDT",) -- por
+    # eso la variante "BTCUSDT" (exacta) SÍ cae dentro de scope y produce
+    # su propio Unexpected* (no hay ExpectedPosition/Order que la
+    # matchee), mientras que la variante con casing/padding distinto cae
+    # FUERA de scope (identidad literal distinta de "BTCUSDT") y se
+    # ignora. Lo que estos tests prueban no es is_in_sync, sino que
+    # NINGUNA de las dos combinaciones dispara ReconciliationPreconditionError
+    # por "duplicado" -- porque, con comparación exacta de string, no lo son.
+
+    def test_symbol_casing_not_normalized_in_duplicate_detection(self):
+        observed = _snapshot(positions=(_obs_position(symbol="BTCUSDT"), _obs_position(symbol="btcusdt")))
+        r = _reconcile(_exp_state(scope=_scope()), observed)  # no debe lanzar
+        assert len(r.divergences) == 1
+        assert isinstance(r.divergences[0], UnexpectedExchangePosition)
+        assert r.divergences[0].symbol == "BTCUSDT"
+
+    def test_symbol_padding_not_normalized_in_duplicate_detection(self):
+        observed = _snapshot(positions=(_obs_position(symbol="BTCUSDT"), _obs_position(symbol=" BTCUSDT")))
+        r = _reconcile(_exp_state(scope=_scope()), observed)  # no debe lanzar
+        assert len(r.divergences) == 1
+        assert r.divergences[0].symbol == "BTCUSDT"
+
+    def test_order_id_casing_not_normalized_in_duplicate_detection(self):
+        # A diferencia de symbol (que también filtra por scope), el scope
+        # de las órdenes es por symbol -- ambas caen dentro de scope
+        # ("BTCUSDT") y, al ser order_id literalmente distintos, ninguna
+        # matchea ninguna ExpectedOpenOrder: se reportan como DOS
+        # UnexpectedExchangeOpenOrder separadas, nunca como duplicado.
+        observed = _snapshot(orders=(_obs_order(order_id="PHX-1"), _obs_order(order_id="phx-1")))
+        r = _reconcile(_exp_state(scope=_scope()), observed)  # no debe lanzar
+        assert len(r.divergences) == 2
+        assert all(isinstance(d, UnexpectedExchangeOpenOrder) for d in r.divergences)
+        assert {d.order_id for d in r.divergences} == {"PHX-1", "phx-1"}
+
+    def test_order_id_padding_not_normalized_in_duplicate_detection(self):
+        observed = _snapshot(orders=(_obs_order(order_id="PHX-1"), _obs_order(order_id=" PHX-1 ")))
+        r = _reconcile(_exp_state(scope=_scope()), observed)  # no debe lanzar
+        assert len(r.divergences) == 2
+        assert {d.order_id for d in r.divergences} == {"PHX-1", " PHX-1 "}
+
+    def test_exact_duplicate_still_detected_case_sensitive(self):
+        # Control positivo: el MISMO string sí sigue siendo rechazado.
+        observed = _snapshot(orders=(_obs_order(order_id="PHX-1"), _obs_order(order_id="PHX-1", exchange_order_id="X2")))
+        with pytest.raises(ReconciliationPreconditionError):
+            _reconcile(_exp_state(scope=_scope()), observed)
+
+    # ── precondición antes de cualquier resultado parcial ────────────────
+
+    def test_duplicate_detected_before_any_divergence_produced(self):
+        expected = _exp_state(
+            scope=_scope(),
+            positions=(_exp_position(),),  # potencial MissingExpectedPosition
+            open_orders=(),
+        )
+        observed = _snapshot(orders=(_obs_order(order_id="PHX-X"), _obs_order(order_id="PHX-X")))
+        with pytest.raises(ReconciliationPreconditionError):
+            _reconcile(expected, observed)
+
+    def test_is_reconciliation_precondition_error_not_infrastructure(self):
+        observed = _snapshot(positions=(_obs_position(), _obs_position(quantity=Decimal("2"))))
+        err = None
+        try:
+            _reconcile(_exp_state(scope=_scope()), observed)
+        except Exception as e:
+            err = e
+        assert isinstance(err, ReconciliationPreconditionError)
+        assert type(err).__name__ != "ExecutionInfrastructureError"
+
+
+# ---------------------------------------------------------------------------
+# ObservationWindow propagation -- IMPORTANTE-2 de la auditoría: producción
+# ya preservaba observed.observation_window por identidad, pero ningún test
+# atravesaba reconcile_execution_state() para verificarlo -- todos
+# construían ReconciliationResult directamente.
+# ---------------------------------------------------------------------------
+
+class TestObservationWindowPropagation:
+    def test_result_window_is_the_observed_snapshot_window_by_identity(self):
+        observed = _snapshot(t=12345)
+        window = observed.observation_window
+        result = reconcile_execution_state(expected=_exp_state(scope=_scope()), observed=observed)
+        assert result.observation_window is window
+
+    def test_result_window_reflects_nontrivial_earliest_latest_span(self):
+        from execution_gateway.positions_contracts import PositionsSnapshot as _PS
+        from execution_gateway.open_orders_contracts import OpenOrdersSnapshot as _OS
+        from execution_gateway.wallet_balance_contracts import WalletBalanceSnapshot as _WS
+        window = ObservationWindow(earliest_remote_time_ms=1000, latest_remote_time_ms=1200, remote_time_span_ms=200)
+        observed = ExchangeStateSnapshot(
+            positions=_PS(positions=(), server_time_ms=1000),
+            open_orders=_OS(orders=(), server_time_ms=1100),
+            wallet_balance=_WS(
+                total_equity=Decimal("1"), total_wallet_balance=Decimal("1"),
+                total_available_balance=Decimal("1"), total_initial_margin=Decimal("0"),
+                total_maintenance_margin=Decimal("0"), currency_balances=(), server_time_ms=1200,
+            ),
+            observation_window=window,
+        )
+        result = reconcile_execution_state(expected=_exp_state(scope=_scope()), observed=observed)
+        assert result.observation_window.earliest_remote_time_ms == 1000
+        assert result.observation_window.latest_remote_time_ms == 1200
+        assert result.observation_window.remote_time_span_ms == 200
+        assert result.observation_window is window
+
+    def test_result_window_not_reconstructed_from_zero(self):
+        # Mata M28 (reconstruir la ventana en ceros): si el motor
+        # reconstruyera la ventana en vez de preservarla, esto fallaria.
+        observed = _snapshot(t=999999)
+        result = reconcile_execution_state(expected=_exp_state(scope=_scope()), observed=observed)
+        assert result.observation_window.earliest_remote_time_ms == 999999
+        assert result.observation_window.latest_remote_time_ms == 999999
+
+
+# ---------------------------------------------------------------------------
 # Identity-first / scope-second -- Sección 24, casos A-D exactos del prompt
 # ---------------------------------------------------------------------------
 

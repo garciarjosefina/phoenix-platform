@@ -40,6 +40,8 @@ def reconcile_execution_state(
         raise TypeError(f"observed must be ExchangeStateSnapshot, got: {type(observed).__name__}")
 
     _reject_expected_limit_orders_without_price(expected)
+    _reject_duplicate_observed_position_identities(observed)
+    _reject_duplicate_observed_order_ids(observed)
 
     divergences: list[Divergence] = []
     divergences.extend(_reconcile_positions(expected=expected, observed=observed))
@@ -68,6 +70,66 @@ def _reject_expected_limit_orders_without_price(expected: ExpectedExecutionState
             )
 
 
+def _reject_duplicate_observed_position_identities(observed: ExchangeStateSnapshot) -> None:
+    # Precondición de entrada, no una divergencia: ni PositionsSnapshot ni
+    # ExpectedExecutionState exigen unicidad de (symbol, side) en el lado
+    # observado. Dos posiciones observadas con la misma identidad son una
+    # ambigüedad ESTRUCTURAL del propio snapshot -- no existe una manera
+    # determinista de decidir cuál de las dos corresponde realmente a esa
+    # identidad, así que V1 falla cerrado en vez de elegir arbitrariamente
+    # "la primera" o "la última" (o de sumarlas/netearlas). Se valida
+    # sobre TODO observed.positions, incluso para identidades fuera de
+    # expected.scope: el scope decide autoridad económica sobre qué se
+    # reporta, no si el snapshot observado en sí es válido -- una
+    # ambigüedad estructural no debe quedar oculta sólo porque cae fuera
+    # de scope. Identidad de string literal y exacta -- sin
+    # strip/upper/lower/casefold, igual que en el resto del matching.
+    # Recorre observed.positions.positions en su orden contractual --
+    # reporta la primera duplicación encontrada, determinista.
+    seen: set[tuple[str, str]] = set()
+    for position in observed.positions.positions:
+        identity = (position.symbol, position.side)
+        if identity in seen:
+            raise ReconciliationPreconditionError(
+                message=(
+                    f"observed positions contain duplicate identity (symbol, side) "
+                    f"{identity!r} -- Reconciliation Engine V1 cannot determine which "
+                    "observed position corresponds to this identity"
+                )
+            )
+        seen.add(identity)
+
+
+def _reject_duplicate_observed_order_ids(observed: ExchangeStateSnapshot) -> None:
+    # Precondición de entrada, no una divergencia: OpenOrdersSnapshot no
+    # exige order_id (Phoenix) único entre sus órdenes. Dos órdenes
+    # observadas con el mismo order_id son una ambigüedad ESTRUCTURAL --
+    # identity-first significa que un order_id Phoenix duplicado ya es
+    # ambiguo ANTES de que el scope participe; no se permite que el scope
+    # ni ningún atributo económico (symbol/side/quantity) esconda la
+    # duplicación. Sólo se valida cuando order_id no es None: dos órdenes
+    # huérfanas (order_id is None) NUNCA se consideran duplicadas entre sí
+    # por compartir None -- cada una sigue siendo una entidad remota
+    # distinta, identificable por su propio exchange_order_id (ver
+    # UnattributedExchangeOpenOrder). Identidad de string literal y
+    # exacta -- sin normalización. Recorre observed.open_orders.orders en
+    # su orden contractual -- reporta la primera duplicación encontrada,
+    # determinista.
+    seen: set[str] = set()
+    for order in observed.open_orders.orders:
+        if order.order_id is None:
+            continue
+        if order.order_id in seen:
+            raise ReconciliationPreconditionError(
+                message=(
+                    f"observed open orders contain duplicate Phoenix order_id "
+                    f"{order.order_id!r} -- Reconciliation Engine V1 cannot determine "
+                    "which observed order corresponds to this identity"
+                )
+            )
+        seen.add(order.order_id)
+
+
 def _reconcile_positions(
     *, expected: ExpectedExecutionState, observed: ExchangeStateSnapshot
 ) -> list[Divergence]:
@@ -79,13 +141,10 @@ def _reconcile_positions(
     # porque Phoenix no tiene autoridad para afirmar nada sobre ella.
     scope_symbols = set(expected.scope.symbols)
 
-    # Nota de límite conocido: ni PositionsSnapshot ni ExpectedExecutionState
-    # exigen unicidad de (symbol, side) en el lado observado -- V1 asume
-    # a lo sumo una posición observada por identidad, consistente con cómo
-    # se comporta realmente el hedge mode de Bybit; si el snapshot
-    # observado llegara a contener duplicados, sólo el último se usa para
-    # comparar (dict, no lista) -- documentado, no una decisión de
-    # reconciliación.
+    # Seguro construir este dict sin pérdida: _reject_duplicate_observed_
+    # position_identities ya rechazó, antes de llegar aquí, cualquier
+    # (symbol, side) repetido en observed.positions -- por construcción,
+    # a lo sumo una posición observada por identidad.
     observed_by_identity = {
         (position.symbol, position.side): position
         for position in observed.positions.positions
@@ -143,11 +202,10 @@ def _reconcile_open_orders(
     # fallback -- sólo se usa para UnattributedExchangeOpenOrder, donde no
     # hay order_id Phoenix por definición.
     #
-    # Nota de límite conocido: OpenOrdersSnapshot no exige order_id único
-    # entre sus órdenes -- V1 asume a lo sumo una orden observada por
-    # order_id Phoenix (un duplicado real sería una anomalía del propio
-    # snapshot, no una decisión de reconciliación); con duplicados, sólo
-    # la última entrada de ese order_id participa en el matching.
+    # Seguro construir este dict sin pérdida: _reject_duplicate_observed_
+    # order_ids ya rechazó, antes de llegar aquí, cualquier order_id
+    # Phoenix repetido en observed.open_orders -- por construcción, a lo
+    # sumo una orden observada por order_id.
     observed_by_order_id = {
         order.order_id: order
         for order in observed.open_orders.orders
