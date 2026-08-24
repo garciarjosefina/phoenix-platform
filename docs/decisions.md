@@ -670,3 +670,68 @@ Envelope de evento; tipos de evento concretos; `event_id`; `ledger_position`/sec
 **Archivos de producción modificados:** ninguno. **Tests nuevos:** ninguno. **Suite:** 5919 passing, sin cambio.
 **Sin conexión real con Bybit; sin Railway; sin persistencia; sin Repair; sin Orchestrator.**
 **Hito 3.79 — ARCHITECTURAL DECISION REQUIRED.**
+
+---
+
+## ADR-008 — Execution Identity: restricciones de identidad de orden congeladas; identidad de cuenta es observable, no inventable; ubicación pendiente de decisión
+
+**Fecha:** 2026-08-20
+**Contexto:** Hito 3.80. ADR-007 bloqueó el modelo de eventos del Execution Ledger sobre dos dependencias estructurales: (1) Phoenix carece de una identidad de orden end-to-end compatible con Bybit, y (2) carece de una identidad de contexto de ejecución/cuenta capaz de sobrevivir coherentemente entre Ledger, Projection, `ExpectedExecutionState`, `ExchangeStateSnapshot` y Reconciliation. Este hito investigó ambas de forma forense. **La primera queda resuelta en sus restricciones; la segunda avanzó materialmente pero conserva una decisión genuina de ubicación.** No se implementó ningún contrato.
+
+### FACT — lo que la evidencia demuestra
+
+**F1 — La incompatibilidad de identidad de orden 42 vs 36 está confirmada de forma independiente.** `phoenix_core.ids.order_id()` produce **exactamente 42 caracteres en 1000/1000 ejecuciones** (`order_` = 6 + UUID4 canónico = 36). El límite de `orderLinkId` está hardcodeado en **tres** lugares del repositorio (`bybit_create_order_request.py`, `bybit_create_order_result.py`, `bybit_gateway.py`), los tres en 36.
+
+**F2 — La documentación oficial vigente de Bybit confirma el límite y añade restricciones de charset.** *Create Order*, parámetro `orderLinkId`: máximo **36 caracteres**; charset — verbatim: *"Combinations of numbers, letters (upper and lower cases), dashes, and underscores are supported."*; y **debe ser siempre único**. La documentación no se pronuncia explícitamente sobre case-sensitivity. Fuente: `https://bybit-exchange.github.io/docs/v5/order/create-order` (consultada 2026-08-20). El valor 36 del repositorio es correcto y está alineado con la documentación actual.
+
+**F3 — La incompatibilidad la causa el prefijo de D-004, no UUID4.** Un UUID4 canónico mide **exactamente 36** caracteres y entra justo en el límite; su forma `.hex` (sin guiones) mide **32**, dejando 4 caracteres libres. Es el prefijo semántico de 6 caracteres (`order_`) exigido por D-004 el que desborda la frontera. Ambas formas de UUID4 usan sólo caracteres permitidos por F2.
+
+**F4 — `phoenix_core.ids.order_id()` NO es utilizable hoy como `orderLinkId`.** Respuesta directa a la pregunta de §2: **no**. `BybitExecutionGateway._to_bybit_request` lo rechazaría con `ExecutionRequestNotSupportedError` antes de llegar a la red. `bot_id()` mide 40 caracteres — tampoco cabría si alguna vez debiera cruzar esa frontera.
+
+**F5 — `ExecutionRequest.order_id` no tiene generador ni restricción de formato.** Su única validación es `if not self.order_id: raise ValueError("order_id cannot be empty")`. Ningún componente de producción lo genera; la única restricción de longitud vive en el adapter, no en el contrato de dominio.
+
+**F6 — Re-verificado el inventario de identidad:** `account_id` → **0 ocurrencias** en todo `platform/`; `user_id` → **0**. `bot_id` (17) y `portfolio_id` (6) existen sólo dentro de `phoenix_core` congelado. En `execution_gateway`, `bot_id` y `strategy_id` aparecen **exclusivamente en comentarios** que documentan su exclusión deliberada (Hito 3.76).
+
+**F7 — Hoy "la cuenta" es el par implícito (credenciales, base_url) ligado en bootstrap.** `bootstrap_bybit_demo_execution_gateway_from_env(environ)` → `BybitDemoExecutionConfig(api_key, api_secret, recv_window_ms, timeout_seconds)` → gateway. El `base_url` (que distingue Demo de Mainnet) se construye por una factory **separada** y no forma parte de la config. Un proceso = una cuenta implícita. No existe identificador de cuenta en ningún contrato de dominio.
+
+**F8 — CLAVE: Bybit expone una identidad de cuenta observable, por un endpoint que Phoenix ya llama.** `GET /v5/user/query-api` devuelve `userID` / `userIDInt64`, además de `parentUid` (*"The main account uid. Returns `"0"` when the endpoint is called by main account"*) e `isMaster`, que juntos describen la jerarquía cuenta principal/subcuenta. Fuente: `https://bybit-exchange.github.io/docs/v5/user/apikey-info` (consultada 2026-08-20). **Es exactamente el endpoint del smoke test** (`bybit_demo_connectivity_smoke_test.py`) — el único camino de este proyecto jamás validado contra Bybit real (Hito 3.68). Esto cambia la naturaleza del problema: la identidad de cuenta **no necesita inventarse, puede observarse**.
+
+**F9 — Pero hoy esa identidad se descarta por completo.** El smoke test sólo extrae `response.time_ms`. `SmokeTestResult` conserva `success`/`endpoint`/`environment`/`server_time`/`account_type` — ningún campo de identidad. Nótese que **`environment` ya existe como concepto obligatorio** en ese contrato, y que `account_type` es el *tipo* de cuenta (UNIFIED/CONTRACT), nunca su identidad.
+
+**F10 — La asimetría posición/orden es física, no un defecto corregible.** Bybit agrega posiciones por `(symbol, side)`: dos bots operando BTCUSDT/buy comparten **una sola** posición remota, y el exchange no puede decir qué fracción pertenece a cada bot. Las órdenes, en cambio, conservan identidad individual y correlación Phoenix vía `orderLinkId`. Por tanto **REMOTE TRUTH** (posición agregada a nivel cuenta) y **INTERNAL ATTRIBUTION** (exposición por bot, reconstruible desde los hechos del Ledger) son dos cosas distintas y deben permanecer separadas.
+
+### DECISION — lo que Phoenix decide en 3.80
+
+**D1 — Restricciones congeladas para la identidad canónica de orden Phoenix que cruza Bybit.** Cualquier identidad futura que deba viajar como `orderLinkId` **debe** satisfacer: longitud ≤ 36; charset ⊆ `[A-Za-z0-9_-]`; unicidad garantizada; **sin truncamiento** de un identificador más largo (truncar destruiría la garantía de unicidad sin declararlo — prohibido explícitamente); comparación exacta de string, sin `strip`/`upper`/`lower` (coherente con ADR-005, Decisión 3). Estas restricciones son externas y verificadas (F2), no preferencias.
+
+**D2 — `phoenix_core.ids.order_id()` queda descartado para esa función, y `phoenix_core` NO se modifica.** Está congelado en v0.1.0 (D-004). No se altera su generador por conveniencia, no se trunca su salida, y no se acopla `execution_gateway` a `phoenix_core` (hoy no lo importa ni una vez). El `order_id` de `phoenix_core` puede seguir siendo identidad **interna** del core; la identidad que cruza el exchange es un concepto distinto que necesita su propia autoridad.
+
+**D3 — La identidad de cuenta no se inventará: se observará.** Dado F8, Phoenix no debe acuñar un `account_id` arbitrario ni derivarlo de credenciales. Queda **prohibido explícitamente** usar como identidad canónica de cuenta: `api_key`, `api_secret`, cualquier hash del secreto, el nombre de una variable de Railway, la cadena `"BYBIT_DEMO"`, o la `base_url`. Las credenciales **autentican**; no son identidad de dominio.
+
+**D4 — Environment y cuenta son dimensiones distintas.** Demo y Mainnet son sistemas Bybit separados y no puede descartarse que un mismo `userID` exista en ambos. Por tanto la identidad de un contexto de ejecución es conceptualmente una tupla — al menos `(exchange, environment, cuenta remota)` — nunca el identificador de cuenta a secas. `environment` ya existe como concepto obligatorio en `SmokeTestResult` (F9).
+
+**D5 — Se preserva la asimetría account-level / bot-level.** No se introducirá `bot_id` en `ExecutionPosition` ni en `ExpectedPosition`: sería una atribución inventada que el exchange no puede respaldar (F10). Un hecho REMOTE/OBSERVED a nivel de cuenta debe poder existir **sin** `bot_id`; un intent originado por un bot sí puede portarlo. El envelope futuro del Ledger debe admitir esa asimetría en vez de exigir `bot_id` universalmente.
+
+**D6 — Ownership de orden por bot se resuelve en el Ledger, sin exigírselo al exchange.** El Ledger asocia `order_id → bot`; Bybit sólo conoce `orderLinkId`. Tras un reinicio, Phoenix reatribuye la orden leyendo Open Orders y cruzando `order_id` contra su propio registro. Arquitectura consistente: no requiere que el exchange sepa nada de bots.
+
+**D7 — Los contratos reciben identidades; no las generan.** Ninguna identidad futura se generará dentro de `__post_init__` ni por `default_factory`. La generación pertenece a una capa autorizada, separada del contrato (a diferencia del patrón de `phoenix_core`, congelado, que sí las autogenera).
+
+**D8 — Reconciliation V1 no se modifica.** Sigue siendo puro y presuponiendo same-account (ADR-005, Decisión 10). La garantía de no comparar cuentas distintas se resolverá donde se decida ubicar la identidad (ver OPEN QUESTIONS 1), no parcheando 3.77.
+
+**D9 — No se implementa ningún contrato en este hito.** Quedan pendientes dos decisiones genuinas (ubicación de la identidad de cuenta; autoridad y forma del generador de order id) sin las cuales cualquier contrato sería prematuro.
+
+### NOT IMPLEMENTED
+
+Ningún contrato, ningún ID, ningún generador, ningún registro de cuentas/usuarios, ningún cambio en `phoenix_core`, ningún cambio en Expected/Observed/Reconciliation, ningún Ledger, ninguna Projection, ninguna persistencia, ningún Repair. Cero cambios de producción y de tests.
+
+### OPEN QUESTIONS — decisiones genuinas escaladas
+
+1. **¿Dónde vive la identidad del contexto de ejecución?** Opciones con consecuencias materialmente distintas: **(A)** campos simétricos añadidos a `ExpectedExecutionState` y `ExchangeStateSnapshot` — hace la garantía estructural y verificable por el reconciler, pero **modifica dos contratos aceptados y protegidos** (Hitos 3.74/3.76) y obliga a migrar todos sus constructores y tests; **(B)** un contexto envolvente (`ExecutionAccountContext` o similar) que contiene ambos lados — no toca ningún contrato aceptado, pero nada impide estructuralmente construir el par cruzado salvo por convención de uso; **(C)** identidad en una capa coordinadora que resuelve y valida antes de llamar al reconciler — mínima invasión, garantía más débil y más tardía. No se elige unilateralmente porque (A) rompe áreas protegidas y (B)/(C) debilitan la garantía.
+2. **¿Cuál es la autoridad y la forma del generador de order id?** Las restricciones están congeladas (D1); la forma no. La única familia que satisface simultáneamente D-004 (UUID4 + prefijo semántico) y F2 es *prefijo corto + `uuid4().hex`* (p. ej. 4 + 32 = 36 exactos), pero elegir el prefijo concreto y decidir si `execution_gateway` obtiene su propio vocabulario de identidades o si se planifica un `phoenix_core` v0.2 es una decisión de ownership de bounded context, no una derivación.
+3. **¿Unicidad global o contextual?** Bybit exige `orderLinkId` único (F2); no está determinado si el alcance de esa unicidad es la cuenta o el exchange entero. Un UUID4 lo hace irrelevante en la práctica, pero la decisión afecta a si la identidad debe embeber cuenta/bot.
+4. **¿Debe capturarse la identidad remota en el arranque?** Resolver `userID` exige una llamada de red en el composition root, hoy inexistente y con implicaciones de pureza y de fallo en arranque.
+5. **¿Necesita el Ledger `strategy_id`?** Hoy no existe productivamente (F6). Podría resolverse como `bot_id → strategy/version` en otro registro; no se inventa aquí.
+6. **Proyección separada de exposición por bot** (F10): conceptualmente necesaria, deliberadamente no diseñada.
+
+**Suite:** 5919 passing, sin cambio. **Sin Bybit real; sin Railway; sin persistencia.**
+**Hito 3.80 — ARCHITECTURAL DECISION REQUIRED.**
