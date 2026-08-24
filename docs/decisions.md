@@ -554,4 +554,55 @@ Se reutilizó `ReconciliationPreconditionError` sin subclasificar (mismo patrón
 **21 tests nuevos, suite 5898→5919.**
 **Sin conexión real con Bybit en esta corrección; sin uso de Railway; sin reparación, sin ledger, sin persistencia, sin Portfolio Orchestrator, sin Market Regime Engine.**
 **Deudas que permanecen explícitamente abiertas (sin cambios en esta corrección):** política de freshness/staleness sobre `ObservationWindow` (Decisión 10 de ADR-005); identidad de cuenta como precondición externa no validada (misma Decisión 10); capa de reparación (no existe todavía, ni en diseño).
-**Hito 3.77 pendiente de reauditoría adversarial final** tras esta corrección.
+**Hito 3.77 pendiente de reauditoría adversarial final** tras esta corrección. — **Actualización: la reauditoría adversarial final independiente posterior confirmó `ACEPTAR HITO 3.77`** (ver `docs/progress.md`, fila "Reauditoría final post-corrección 3.77").
+
+---
+
+## ADR-006 — Expected State Temporal Provenance: bloqueada por ausencia de autoridad productora; el Execution Ledger es el prerrequisito
+
+**Fecha:** 2026-08-20
+**Contexto:** Hito 3.78. Tras la aceptación del Reconciliation Engine V1 (ADR-005), queda una asimetría temporal explícita: el lado observado sabe **cuándo** fue observado (`ObservationWindow`, `server_time_ms`), pero `ExpectedExecutionState` no expresa **desde cuándo** esa expectativa concreta tiene autoridad. El objetivo del hito era dar *temporal provenance* al lado esperado — produciendo hechos temporales, nunca políticas temporales (nada de thresholds de freshness, ventanas de convergencia, retries, ni clasificación transitorio/persistente). La investigación forense previa a cualquier diseño concluyó que **la decisión no puede tomarse todavía sin arbitrariedad**, y el hito se detuvo deliberadamente antes de escribir código.
+
+### FACT — lo que el código demuestra hoy
+
+**F1 — `ExpectedExecutionState` no tiene ningún productor en producción.** `grep "ExpectedExecutionState("` sobre `platform/` devuelve **cero** resultados; sólo se construye en dos archivos de tests. No existe factory, builder, projection engine ni ningún otro constructor. Es exclusivamente un contrato/lenguaje de dominio (ADR-004: *"es una proyección, no la fuente primaria de verdad"*).
+
+**F2 — Ninguno de los siete eventos temporales candidatos está registrado en Phoenix.** Evaluados explícitamente: T1 decisión de intención (el concepto no existe); T2 construcción de `ExecutionRequest` (`contracts.py` — sin campo temporal); T3/T4 envío/transmisión (nada lo registra); T5 ACK de Bybit (**el valor existe pero se descarta**, ver F3); T6 incorporación del ACK a una proyección (no existe proyección); T7 publicación de una revisión completa del expected state (no existe publicador). `ExecutionResult` tampoco porta timestamp.
+
+**F3 — El tiempo del ACK remoto existe en transporte pero se descarta antes del dominio.** `BybitResponse.time_ms` se parsea en toda respuesta (`bybit_response_parser.py`), incluida la de creación de orden, pero `BybitCreateOrderResponseInterpreter` extrae únicamente `orderId`/`orderLinkId`: `BybitCreateOrderResult` no lo transporta. Es el único de T1-T7 con un valor físicamente disponible hoy — y es *server time remoto*, no tiempo local de una expectativa.
+
+**F4 — El único reloj de dominio existente tiene semántica de transporte, no de negocio.** `MillisecondClock`/`SystemMillisecondClock` (`time.time_ns() // 1_000_000`) tiene **exactamente un consumidor en toda la producción**: `standard_bybit_authenticator.py`, donde produce el timestamp de firma HMAC (`X-BAPI-TIMESTAMP`). Ni siquiera se almacena — va al header. Reutilizarlo como fecha de vigencia de una expectativa sería semánticamente falso. Los `datetime.now(timezone.utc)` de `phoenix_core` pertenecen a un contexto acotado **CONGELADO** (v0.1.0) que además usa `datetime`, no el vocabulario `*_ms` del `execution_gateway`.
+
+**F5 — No existe ningún concepto de identidad de versión.** `grep` de `revision`/`generation`/`sequence`/`event_id`/`state_id` sobre `platform/execution_gateway/` devuelve cero resultados. Tampoco existe ledger, event store, journal ni persistencia de ningún tipo.
+
+**F6 — El repositorio ya había identificado este bloqueo.** `docs/architecture.md` §11, escrito durante el Hito 3.76: *"no ledger/projection engine exists to populate a real timestamp"*. §12 lo repite como pendiente explícito: *"how a real `ExpectedExecutionState` gets populated for a live account (a future projection engine)"*. Esta ADR no descubre el problema — confirma con evidencia de código que sigue sin resolverse y explica por qué bloquea a 3.78.
+
+### DECISION — lo que Phoenix decide en 3.78
+
+**D1 — No se introduce ninguna provenance temporal en `ExpectedExecutionState` en este hito.** Cero cambios de producción, cero contratos nuevos, cero tests nuevos. Añadir `created_at_ms = clock.now()` por conveniencia habría producido un hecho temporal semánticamente falso: un número sin autoridad que lo asigne ni evento que represente.
+
+**D2 — La semántica correcta es determinable; el valor no tiene fuente.** Se deja registrado el razonamiento para que un hito futuro no lo re-derive desde cero: `ExpectedExecutionState` es, por definición de ADR-004, una **proyección** que abarca `scope` + posiciones + órdenes. T1-T6 son todos hechos **a nivel de una orden o request individual** y ninguno puede fechar una proyección completa multi-símbolo. Sólo **T7** — la publicación de una revisión completa — es un hecho *sobre la proyección misma*, y por tanto el único candidato semánticamente coherente. Pero T7 exige un publicador, y no existe.
+
+**D3 — Tiempo e identidad de versión son conceptos distintos, y el timestamp solo no basta como identidad.** Dos revisiones del expected state pueden publicarse dentro del mismo milisegundo. Una provenance completa requeriría conceptualmente algo como `(effective_at_ms, revision)` — pero el espacio de `revision` (¿contador monótono? ¿offset de ledger? ¿event id?) lo define el publicador inexistente. No se elige ninguna forma aquí.
+
+**D4 — El prerrequisito es el Execution Ledger / projection engine, y ese es el siguiente trabajo de diseño** (decisión de la directora del proyecto, tomada sobre el informe forense de este hito). La provenance temporal no es un campo que agregar a un contrato: es una propiedad que **asigna la autoridad que computa la proyección**. Una vez exista el ledger, la provenance cae por su propio peso — sería la posición/tiempo del ledger desde el que se derivó la proyección — en vez de ser un número elegido a mano.
+
+**D5 — `ObservationWindow` permanece intacta y conceptualmente separada.** Responde *"¿durante qué intervalo observamos el estado remoto?"*; la provenance esperada debe responder *"¿desde cuándo esta versión concreta del estado esperado tiene autoridad?"*. No se copia `ObservationWindow` al lado esperado, no se deriva una de otra, y no se introduce ningún `max_span`/`freshness_threshold`/`staleness_threshold`.
+
+**D6 — Cualquier provenance futura debe ser inmutable.** Una versión concreta del expected state no debe poder cambiar retroactivamente su tiempo efectivo: si la expectativa cambia, conceptualmente nace una **nueva** versión/proyección, nunca se muta la anterior. Se documenta aquí aunque el productor de esas versiones todavía no exista.
+
+**D7 — Identidad de cuenta: dependencia registrada, no resuelta.** "Desde cuándo esta expectativa tiene autoridad" está implícitamente scopeado a una cuenta, por lo que provenance temporal e identidad de cuenta comparten el mismo prerrequisito (una autoridad productora). Sigue sin resolverse y debe cerrarse **simétrica y aditivamente** sobre `ExpectedExecutionState` **y** `ExchangeStateSnapshot`, nunca parcheada sobre un solo lado (deuda heredada de ADR-004 MENOR-3, reafirmada en ADR-005 Decisión 10).
+
+### NOT IMPLEMENTED — lo que queda para 3.79+
+
+- **Execution Ledger / projection engine** — el prerrequisito elegido. Debe definir qué eventos registra, cómo se derivan proyecciones de él, y qué identidad/posición expone (de la cual se derivará la provenance).
+- **Temporal provenance de `ExpectedExecutionState`** — semántica T7 recomendada por D2, pendiente de que exista la autoridad que la asigne.
+- **Identidad de versión/revisión** — forma sin decidir (D3).
+- **Identidad de cuenta simétrica** (D7).
+- **Freshness/staleness policy y convergence policy** — explícitamente fuera de alcance: este hito produce (o en este caso, deliberadamente no produce) hechos temporales, nunca políticas.
+- **Repair Engine / Repair Policy** — sigue sin existir en el repositorio; nada de este hito la acerca.
+- **Captura del tiempo del ACK remoto (F3)** — hueco menor identificado, no cerrado: cerraría un hecho a nivel de orden, no la provenance de la proyección.
+
+**Archivos de producción modificados:** ninguno. **Tests nuevos:** ninguno. **Suite:** 5919 passing, sin cambio.
+**Sin conexión real con Bybit; sin uso de Railway; sin Repair; sin ledger; sin persistencia.**
+**Hito 3.78 — ARCHITECTURAL DECISION REQUIRED**: cerrado como decisión arquitectónica documentada, no como implementación. El objetivo original (dar provenance temporal al expected state) queda deliberadamente diferido hasta que exista el Execution Ledger.
