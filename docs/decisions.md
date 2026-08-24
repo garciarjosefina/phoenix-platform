@@ -606,3 +606,67 @@ Se reutilizó `ReconciliationPreconditionError` sin subclasificar (mismo patrón
 **Archivos de producción modificados:** ninguno. **Tests nuevos:** ninguno. **Suite:** 5919 passing, sin cambio.
 **Sin conexión real con Bybit; sin uso de Railway; sin Repair; sin ledger; sin persistencia.**
 **Hito 3.78 — ARCHITECTURAL DECISION REQUIRED**: cerrado como decisión arquitectónica documentada, no como implementación. El objetivo original (dar provenance temporal al expected state) queda deliberadamente diferido hasta que exista el Execution Ledger.
+
+---
+
+## ADR-007 — Execution Ledger: modelo de eventos bloqueado por identidad de ejecución (cuenta/bot) no modelada
+
+**Fecha:** 2026-08-20
+**Contexto:** Hito 3.79. ADR-006 estableció que la provenance temporal del `ExpectedExecutionState` sólo puede derivarse de la autoridad que computa la proyección, y que el prerrequisito es diseñar el Execution Ledger / projection engine. Este hito debía responder: *"¿qué hechos de ejecución debe registrar Phoenix para poder reconstruir de manera determinista y auditable el estado esperado de cada cuenta/bot y publicar revisiones de `ExpectedExecutionState`?"* La investigación forense produjo un modelo parcialmente derivable, pero encontró **un bloqueo estructural en la dimensión de identidad del propio evento**, que es el campo más fundamental de cualquier envelope. El hito se detuvo antes de congelar el envelope y antes de escribir código.
+
+### FACT — lo que el código demuestra hoy
+
+**F1 — No existe Execution Ledger, projection engine ni persistencia de ningún tipo.** Cero archivos `ledger`/`event`/`projection` en `platform/execution_gateway/`; cero clases `Ledger`/`EventStore`/`Journal`/`Repository` en todo `platform/`.
+
+**F2 — `execution_gateway` y `phoenix_core` son contextos acotados disjuntos.** `grep "phoenix_core" platform/execution_gateway/*.py` → **cero** resultados. `phoenix_core` está **CONGELADO** en v0.1.0. Los dos contextos modelan órdenes con vocabularios distintos e incompatibles (ver F4).
+
+**F3 — Inventario de identidades (`platform/`, excluyendo `egg-info`):** `account_id` → **0 ocurrencias**. `user_id` → **0 ocurrencias**. `bot_id` (17), `trade_id` (6), `signal_id` (14), `portfolio_id` (6), `event_id` (6) existen **exclusivamente dentro de `phoenix_core` congelado**. `strategy_id` (2) aparece **sólo en comentarios** de `expected_execution_state_contracts.py`, describiendo lo que se excluyó deliberadamente. En `execution_gateway` las únicas identidades reales son `order_id` (Phoenix) y `exchange_order_id` (remota).
+
+**F4 — Los `order_id` de los dos contextos son estructuralmente incompatibles.** `phoenix_core.ids.order_id()` produce `order_<uuid4>` = **42 caracteres** (D-004, prefijo semántico + UUID4). El límite de `orderLinkId` de Bybit — replicado en `BybitCreateOrderResult` y en `bybit_gateway._ORDER_ID_MAX_LEN` — es **36**. Un `order_id` de `phoenix_core` **no puede** viajar a Bybit: `BybitExecutionGateway._to_bybit_request` lo rechazaría con `ExecutionRequestNotSupportedError`. Verificado ejecutando el generador real.
+
+**F5 — El `order_id` Phoenix sí sobrevive el viaje de ida y vuelta, y la correlación se verifica.** Cadena confirmada por código: `ExecutionRequest.order_id` → `BybitCreateOrderRequest.order_link_id` → payload `orderLinkId` (`bybit_create_order_payload_builder.py`) → Bybit → de vuelta en el ACK como `BybitCreateOrderResult.order_link_id`, y recuperable después vía read-side (`bybit_open_orders_response_interpreter.py:80`: `orderLinkId` → `ExecutionOpenOrder.order_id`). `BybitExecutionGateway._to_execution_result` **verifica explícitamente** `result.order_link_id == request.order_id` y falla cerrado si no coincide. Nota de nomenclatura peligrosa: en `BybitCreateOrderResult`, `order_id` significa el id **de Bybit** y `order_link_id` el **de Phoenix** — exactamente al revés que en `ExecutionOpenOrder`.
+
+**F6 — Información que el write-side descarta hoy en cada frontera:** `BybitResponse.time_ms` (tiempo de ACK remoto — se parsea pero el interpreter de create-order sólo extrae `orderId`/`orderLinkId`); `ret_ext_info`; el timestamp de firma HMAC (único tiempo local de envío, va al header y nunca se almacena); `time_in_force` y `reduce_only` (**hardcodeados** a `"GTC"`/`False` en `bybit_gateway.py`, nunca registrados como hechos); y `ExecutionResult` no porta ningún timestamp.
+
+**F7 — Ante fallo de transporte, Phoenix no conserva absolutamente ningún registro.** `BybitExecutionGateway.execute` captura `_TRANSPORT_FAILURES = (OSError, BybitResponseProcessingError)` y **levanta** `ExecutionInfrastructureError`. No hay escritura previa al envío ni registro del intento. Es decir: hoy la ambigüedad de una orden cuya respuesta se perdió **no está mal representada — está completamente perdida**. Éste es el riesgo de orden duplicada que el modelo de eventos debe cerrar.
+
+**F8 — La cuenta es implícita en las credenciales.** `BybitDemoExecutionConfig(api_key, api_secret, ...)` es la única noción de "cuenta" existente: una configuración = una cuenta implícita. No hay ningún identificador de cuenta en ningún contrato de dominio.
+
+**F9 — El lado esperado declinó explícitamente la atribución por bot.** `ExpectedPosition` documenta: *"Deliberadamente sin ... bot_id/strategy_id — (symbol, side) + quantity es la identidad y magnitud mínimas... No se afirma que alcance ... para atribuir ownership por bot."* `ExpectedOpenOrder` excluye igualmente `bot_id`/`strategy_id`.
+
+**F10 — Asimetría real e ineludible entre posiciones y órdenes.** Bybit agrega posiciones por `(symbol, side)`: dos bots operando BTCUSDT/buy producen **una sola** posición remota. Las órdenes, en cambio, conservan identidad individual (`orderLinkId`), por lo que la atribución por bot **sí** es físicamente preservable en órdenes y **no** en posiciones. Cualquier modelo debe respetar esta asimetría en vez de asumir simetría.
+
+### DECISION — lo que Phoenix decide en 3.79
+
+**D1 — No se implementa ningún contrato. No se congela ningún envelope.** El campo más fundamental de un envelope de evento es a quién pertenece el hecho, y esa dimensión no está modelada (F3/F8/F9). Congelar un envelope ahora contaminaría todo el sistema posterior.
+
+**D2 — Requisito derivado, no elegido: el Ledger debe registrar el intento de envío ANTES de la llamada remota.** Se deriva de F7 más el caso de timeout: para poder distinguir *"nunca se envió"* de *"se envió, resultado desconocido"* es imprescindible un hecho local persistido antes del `place_order`. Sin él, el reinicio tras crash no puede distinguir los casos B y C, y cualquier reintento futuro arriesga orden duplicada. Esto no es una preferencia de diseño: es la única forma de que la incertidumbre exista como estado.
+
+**D3 — Requisito derivado: un timeout nunca puede registrarse como éxito ni como rechazo.** Debe existir un hecho explícito de *resultado desconocido*, resoluble después por read-side (consultando `orderLinkId` en Open Orders), nunca convertido por conveniencia en `OrderCreated` ni en `OrderRejected`.
+
+**D4 — Requisito derivado: el `order_id` Phoenix es la clave de correlación e idempotencia.** Justificado por F5: viaja, vuelve, es recuperable desde el read-side, y el gateway ya verifica la correspondencia. `exchange_order_id` **nunca** la sustituye (ADR-005, Decisión 4). La asociación `order_id ↔ exchange_order_id` es un hecho **remoto confirmado** y debe quedar auditable como tal, no inferido.
+
+**D5 — Requisito derivado: tres autoridades distintas por hecho — LOCAL / REMOTE / OBSERVED.** *"Envié una request"* (local), *"Bybit confirmó"* (remoto) y *"lo descubrí después vía read-side"* (observado) no son equivalentes y el modelo debe impedir que se confundan. F6/F7 muestran que hoy esa distinción no existe en ningún lado.
+
+**D6 — El Reconciliation Engine V1 permanece puro y no escribe en el Ledger.** ADR-005 está aceptado. Si en el futuro una capa convierte divergencias en hechos observados, será **otra** responsabilidad, no 3.77.
+
+**D7 — El Ledger no decide Repair, ni LIMIT vs MARKET, ni sizing de riesgo.** Registra qué se intentó y qué ocurrió. La elección LIMIT/MARKET pertenece a la estrategia/bot y, cuando existan, a las capas autorizadas de portfolio/execution/orchestration (regla del proyecto: se prefiere LIMIT por costos inferiores cuando sea razonablemente posible y no perjudique materialmente la operativa; MARKET puede ser superior cuando el beneficio neto esperado lo justifique por urgencia, probabilidad de fill, slippage u oportunidad).
+
+**D8 — BLOQUEO: la identidad de ejecución (cuenta y bot) no está modelada, y resolverla es transversal.** No se puede definir ownership de un evento sin ella (F3/F8). Y no puede resolverse unilateralmente dentro del Ledger: si los eventos portan `account_id` pero `ExpectedExecutionState` (que sería *producido por la proyección de esos eventos*) y `ExchangeStateSnapshot` no lo portan, la proyección **pierde** justo la dimensión que el Ledger estaba conservando, y la reconciliación compararía una proyección con ámbito de cuenta contra una observación sin cuenta. Ambos contratos están **aceptados y protegidos** (Hitos 3.74 y 3.76), por lo que la decisión excede el alcance de este hito. Se escala a la directora del proyecto.
+
+### NOT IMPLEMENTED — lo que queda para 3.80+
+
+Envelope de evento; tipos de evento concretos; `event_id`; `ledger_position`/secuencia; append-only y su mecanismo de corrección; ordering determinista ante timestamps iguales; Projection Engine; identidad de revisión; provenance temporal (ADR-006); persistencia física (deliberadamente ninguna tecnología elegida — sin PostgreSQL/Redis/SQLite/Kafka/NATS/S3/ORM); versionado de schema; captura del ACK time (F6, requiere evidencia documental de qué garantiza realmente Bybit antes de tratarlo como tiempo de creación); Repair; Portfolio Orchestrator.
+
+### OPEN QUESTIONS — decisiones pendientes, ninguna resuelta aquí
+
+1. **Identidad de cuenta y de bot** — *el bloqueo* (D8). Debe resolverse simétrica y aditivamente sobre Ledger + `ExpectedExecutionState` + `ExchangeStateSnapshot`, nunca parcheada sobre un solo lado.
+2. **Alcance del ordering** — ¿secuencia global o por cuenta? Depende directamente de (1).
+3. **Atribución por bot en posiciones** — imposible físicamente (F10); ¿se acepta que la proyección sea agregada en posiciones y atribuida en órdenes?
+4. **Reconciliation discoveries** — ¿generan hechos observados, o la reconciliación es sólo diagnóstico? No decidido (D6 sólo prohíbe que 3.77 sea el escritor).
+5. **Puente `phoenix_core` ↔ `execution_gateway`** — F2/F4 muestran vocabularios de orden incompatibles (42 vs 36 caracteres). ¿Quién genera el `order_id` que viaja a Bybit?
+6. **Versionado de schema** del modelo de eventos, antes de cualquier persistencia real.
+
+**Archivos de producción modificados:** ninguno. **Tests nuevos:** ninguno. **Suite:** 5919 passing, sin cambio.
+**Sin conexión real con Bybit; sin Railway; sin persistencia; sin Repair; sin Orchestrator.**
+**Hito 3.79 — ARCHITECTURAL DECISION REQUIRED.**
