@@ -735,3 +735,59 @@ Ningún contrato, ningún ID, ningún generador, ningún registro de cuentas/usu
 
 **Suite:** 5919 passing, sin cambio. **Sin Bybit real; sin Railway; sin persistencia.**
 **Hito 3.80 — ARCHITECTURAL DECISION REQUIRED.**
+
+---
+
+## ADR-009 — Execution Identity Foundations: identidades de cuenta y orden implementadas; wrappers account-scoped sin tocar contratos aceptados
+
+**Fecha:** 2026-08-20
+**Contexto:** Hito 3.81. ADR-008 dejó escaladas dos decisiones (dónde vive la identidad del contexto de ejecución; autoridad y forma del generador de order id). Ambas fueron resueltas por la directora del proyecto y este hito las implementa como fundaciones mínimas, previas al Execution Ledger. **No** se implementó Ledger, Projection Engine, Repair, ni Account Registry persistente, y **no** se rediseñó Reconciliation V1.
+
+### FACT — evidencia reconstruida independientemente
+
+**F1 — Incompatibilidad legacy confirmada.** `phoenix_core.ids.order_id()` produce **42 caracteres en 500/500 ejecuciones** (`order_` = 6 + UUID4 canónico = 36). El límite de `orderLinkId` está hardcodeado en **tres** archivos del repositorio, los tres en 36. Un UUID4 canónico mide exactamente 36; su forma `.hex` mide 32. Confirma ADR-008 F1/F3.
+
+**F2 — Restricciones externas** (documentación oficial de Bybit, ya citada en ADR-008 F2): `orderLinkId` máximo 36 caracteres, charset *"numbers, letters (upper and lower cases), dashes, and underscores"*, unicidad obligatoria. No se introdujo ninguna restricción externa inventada.
+
+**F3 — Estado previo re-verificado:** `phoenix_core` sigue en v0.1.0 congelado; `ExpectedExecutionState` y `ExchangeStateSnapshot` siguen siendo account-level; Reconciliation V1 sigue presuponiendo same-account; `account_id`/`user_id` seguían con **cero ocurrencias** en `execution_gateway`; `GET /v5/user/query-api` sigue apareciendo sólo en el smoke test, sin conservar identidad remota productivamente.
+
+### DECISION / IMPLEMENTED
+
+**D1 — `ExecutionAccountId`: identidad interna, opaca, recibida.** Value object frozen de un único campo `value: str`. Preservación literal exacta — sin `strip`/`upper`/`lower`/`casefold`: `"ACCOUNT-A"`, `"account-a"` y `" ACCOUNT-A "` son identidades **distintas**. Prohibido derivarla de credenciales (`api_key`, `api_secret`, huellas de secretos), de nombres de variables de entorno, de `"BYBIT_DEMO"` o de `base_url`. No se autogenera: el contrato **recibe** la identidad. Deliberadamente **no se congeló** un formato textual ni un generador oficial para esta identidad, porque no existe todavía la autoridad que la acuñaría (el futuro Account Registry) — el contrato admite cualquier identidad recibida sin que eso congele su forma.
+
+**D2 — `ExchangeAccountIdentity`: identidad remota observable, como vocabulario.** Frozen, tres campos `exchange`/`environment`/`remote_user_id`, todos `str` no vacíos ni whitespace-only, con preservación exacta. **Las tres dimensiones son identidad**, no metadata: Demo y Mainnet son sistemas Bybit separados, así que `(bybit, demo, 123)` ≠ `(bybit, mainnet, 123)`, protegido por test. `remote_user_id` es `str` y no `int` deliberadamente — Bybit expone `userID` (entero) y `userIDInt64` (string), y el bounded context ya preserva identificadores remotos como strings exactos (cf. `exchange_order_id`); un `int` se rechaza. **Sin** `parent_uid`/`is_master`: describen la relación cuenta principal/subcuenta, no la identidad de esta cuenta. **Sin** credenciales de ningún tipo. Hoy **ningún componente de producción lo construye**: es vocabulario disponible, no binding persistido.
+
+**D3 — `ExecutionOrderId`: formato canónico ESTRICTO, no mera compatibilidad de frontera.** ADR-008 congeló el formato `ord_` + `uuid4().hex` (4 + 32 = 36). Se resolvió la ambigüedad A-vs-B de §9 del hito a favor de **B (formato exacto)**: el contrato valida prefijo `ord_` + exactamente 32 hex **en minúscula**, y rechaza cualquier otra cosa. Razonamiento: (a) la decisión arquitectónica congeló *ese* formato como LA identidad canónica del bounded context, no "cualquier string que quepa"; (b) esta identidad no reemplaza todavía ningún `order_id` existente — `ExecutionRequest`/`ExpectedOpenOrder`/`ExecutionOpenOrder` conservan `order_id: str` sin cambios —, así que no hay valores legacy que acomodar; (c) un `orderLinkId` remoto que no cumpla el formato simplemente **no es una orden Phoenix**, afirmación más fuerte y más útil que "cabe en 36 caracteres", y coherente con la clasificación de órdenes no atribuibles ya aceptada en 3.77. Minúscula estricta porque `uuid4().hex` produce minúsculas y la documentación de Bybit **no se pronuncia** sobre case-sensitivity de `orderLinkId`: aceptar mayúsculas crearía dos strings distintos que representarían "la misma" orden sin evidencia de que el exchange los trate como iguales. Se rechazan explícitamente, con test, el UUID4 canónico con guiones (36 caracteres, charset válido, formato incorrecto) y el formato legacy de 42.
+
+**D4 — Generador explícito y separado: `create_execution_order_id()`.** Vive en su propio módulo, siguiendo la convención `*_factory.py` / `create_*` del repositorio. El contrato **nunca** genera en `__post_init__` ni por `default_factory` — a diferencia del patrón de `phoenix_core`, congelado, que sí autogenera; un contrato que se autogenera identidad no puede representar una identidad ya existente (p.ej. una leída de vuelta desde el exchange). Conserva íntegros los 32 caracteres hex, es decir los 122 bits aleatorios efectivos de UUID4: **no se trunca, no se recorta, no se elimina ningún carácter**. Sobre colisiones se documenta la garantía como **probabilística, nunca imposibilidad matemática**: Phoenix no mantiene registro global de identidades emitidas, y una colisión sería rechazada por Bybit (que exige unicidad), no detectada localmente.
+
+**D5 — `phoenix_core.ids.order_id()` no se reutiliza ni se modifica.** `phoenix_core` v0.1.0 permanece **byte-idéntico** (verificado). Su `order_id` sigue siendo identidad interna legítima de *ese* bounded context; simplemente **no es** la identidad canónica del bounded context de ejecución. No se trunca su salida, no se transforma, no se usa como input del nuevo generador, y `execution_gateway` **no importa `phoenix_core`** (verificado por AST en tests). No se declara deprecated globalmente: el repositorio no ha tomado esa decisión.
+
+**D6 — Wrappers account-scoped simétricos, sin tocar contratos aceptados.** `AccountScopedExpectedExecutionState(execution_account_id, state)` y `AccountScopedExchangeStateSnapshot(execution_account_id, state)`. **Envuelven, no reescriben**: `ExpectedExecutionState` (3.76) y `ExchangeStateSnapshot` (3.74) quedaron **byte-idénticos**; los wrappers no copian `scope`/`positions`/`open_orders`/`wallet_balance`, no reconstruyen `ObservationWindow`, y preservan el objeto envuelto **por identidad de objeto** (`is`), protegido por tests y por los mutantes M13/M14. Siguen siendo account-level: no portan `bot_id`.
+
+**D7 — Los wrappers llevan sólo `ExecutionAccountId`, no `ExchangeAccountIdentity`.** La garantía que estos wrappers existen para dar — no comparar la expectativa de una cuenta contra la observación de otra — se obtiene enteramente con la identidad interna. Verificar que esa identidad interna corresponde realmente a una cuenta remota concreta es *binding verification*, responsabilidad del futuro Account Registry, que no existe. No se mezcla verificación de binding dentro de estos wrappers.
+
+**D8 — `reconcile_account_scoped_execution_state()`: capa delgada que delega.** Verifica tipos, compara `ExecutionAccountId` con igualdad exacta y **falla cerrado** si difieren; si coinciden, delega en `reconcile_execution_state` y devuelve **exactamente el objeto** que produjo el reconciler aceptado, sin reconstruirlo ni envolverlo. **No reimplementa nada**: no hace matching de posiciones ni de órdenes, no filtra por scope, no compara precios, no detecta duplicados. Garantía protegida conductualmente (spy que verifica delegación única con los objetos desenvueltos, e identidad del resultado) además de por AST, y por los mutantes M15/M16/M20. **Reconciliation Engine V1 quedó byte-idéntico**: sigue sin conocer la existencia de identidades de cuenta; lo que cambia es que ahora existe una capa exterior capaz de garantizar la precondición que ADR-005 Decisión 10 dejaba como externa.
+
+**D9 — `CrossAccountReconciliationError`: excepción propia, no reutilización de `ReconciliationPreconditionError`.** Son fronteras conceptualmente distintas: `ReconciliationPreconditionError` describe un input estructuralmente irreconciliable *dentro de una misma cuenta* (una LIMIT esperada sin precio, una identidad observada duplicada) y la levanta el propio reconciler sobre los datos; el cruce de cuentas es un error de **enrutamiento/cableado del caller**, anterior y ajeno a los datos. La remediación difiere — ahí se re-lee el snapshot, aquí se corrige quién llama con qué — y un caller que capturase una sola excepción para ambos casos no podría distinguirlos. Se verifica por test que ninguna es subclase de la otra. Tampoco es `ExecutionInfrastructureError`: no hay I/O.
+
+**D10 — Ownership de bot y de posición sin cambios.** No se agregó `bot_id` a `ExecutionAccountId`, `ExchangeAccountIdentity`, `ExecutionPosition`, `ExchangeStateSnapshot` ni a los wrappers, y **no se embebe dentro del texto de `ExecutionOrderId`** (protegido por M18). Las posiciones remotas siguen siendo account-level por `(symbol, side)`. La atribución por bot vivirá en el futuro Ledger como dimensión separada.
+
+### NOT IMPLEMENTED
+
+Execution Ledger; Projection Engine; Repair; Account Registry persistente (ni `ExecutionAccountRegistry`, ni repositorio, ni mapping de credenciales, ni tabla, ni JSON); primitiva productiva para `GET /v5/user/query-api` (el smoke test **no** se modificó); binding entre `ExecutionAccountId` y `ExchangeAccountIdentity`; `BotExposureProjection`; provenance temporal (ADR-006); persistencia de cualquier tipo. Ninguna de las nuevas identidades fluye todavía por el write-side ni por el read-side: `ExecutionRequest`, `ExpectedOpenOrder` y `ExecutionOpenOrder` conservan `order_id: str` sin cambios.
+
+### OPEN QUESTIONS
+
+1. **Autoridad y formato de `ExecutionAccountId`** — quién acuña estas identidades y con qué forma sigue sin decidirse (requiere el Account Registry).
+2. **Cómo se verifica el binding** `ExecutionAccountId` ↔ `ExchangeAccountIdentity` — requiere la primitiva de `query-api` y una decisión sobre cuándo resolverla (arranque vs. bajo demanda), con implicaciones de pureza en el composition root.
+3. **Cuándo migran los contratos existentes** de `order_id: str` a `ExecutionOrderId` — no se hizo aquí para no tocar áreas aceptadas.
+4. **Alcance de la unicidad** del order id (global vs. por cuenta) — irrelevante en la práctica con UUID4, sin decidir formalmente.
+5. **`strategy_id`** — sigue sin existir productivamente; no se inventó.
+
+**Archivos nuevos:** `execution_identity_contracts.py`, `execution_order_id_factory.py`, `cross_account_reconciliation_error.py`, `account_scoped_execution_state_contracts.py`, `account_scoped_reconciliation.py`.
+**Archivos existentes extendidos (aditivo):** `__init__.py` (+8 exports).
+**Byte-idénticos verificados por hash de git:** `expected_execution_state_contracts.py`, `exchange_state_contracts.py`, `reconciliation_engine.py`, `reconciliation_contracts.py`, `reconciliation_precondition_error.py`, `positions_contracts.py`, `open_orders_contracts.py`, `contracts.py`, `bybit_gateway.py`, todo `phoenix_core/`, `railway.toml`, `pyproject.toml`.
+**98 tests nuevos, suite 5919→6017. 20/20 mutaciones M1-M20 detectadas, 0 sobrevivientes, 0 equivalentes**, cada una restaurada y verificada byte-idéntica.
+**Sin conexión real con Bybit; sin Railway; sin persistencia; sin Repair.**
+**Hito 3.81 no declarado aceptado — pendiente de auditoría adversarial independiente.**
