@@ -175,6 +175,22 @@ from execution_gateway.reconciliation_contracts import (
     ReconciliationResult,
 )
 from execution_gateway.reconciliation_engine import reconcile_execution_state
+from execution_gateway.execution_identity_contracts import (
+    ExecutionAccountId,
+    ExchangeAccountIdentity,
+    ExecutionOrderId,
+)
+from execution_gateway.execution_order_id_factory import create_execution_order_id
+from execution_gateway.account_scoped_execution_state_contracts import (
+    AccountScopedExpectedExecutionState,
+    AccountScopedExchangeStateSnapshot,
+)
+from execution_gateway.cross_account_reconciliation_error import (
+    CrossAccountReconciliationError,
+)
+from execution_gateway.account_scoped_reconciliation import (
+    reconcile_account_scoped_execution_state,
+)
 
 __all__ = [
     "__version__",
@@ -317,4 +333,12 @@ __all__ = [
     "OrderPriceMismatch",
     "ReconciliationResult",
     "reconcile_execution_state",
+    "ExecutionAccountId",
+    "ExchangeAccountIdentity",
+    "ExecutionOrderId",
+    "create_execution_order_id",
+    "AccountScopedExpectedExecutionState",
+    "AccountScopedExchangeStateSnapshot",
+    "CrossAccountReconciliationError",
+    "reconcile_account_scoped_execution_state",
 ]
