@@ -791,3 +791,104 @@ Execution Ledger; Projection Engine; Repair; Account Registry persistente (ni `E
 **98 tests nuevos, suite 5919→6017. 20/20 mutaciones M1-M20 detectadas, 0 sobrevivientes, 0 equivalentes**, cada una restaurada y verificada byte-idéntica.
 **Sin conexión real con Bybit; sin Railway; sin persistencia; sin Repair.**
 **Hito 3.81 no declarado aceptado — pendiente de auditoría adversarial independiente.**
+
+---
+
+## ADR-010 — Execution Ledger Event Model: diseño lógico, sin storage; bloqueado en la dimensión de bot ownership
+
+**Fecha:** 2026-08-25
+**Contexto:** Hito 3.82. Con `ExecutionAccountId` y `ExecutionOrderId` aceptados (Hito 3.81), el Execution Ledger vuelve a ser la frontera siguiente (ADR-007). Este hito responde: *"¿qué es exactamente un evento del Execution Ledger?"* — diseño lógico únicamente, sin storage físico, sin Projection Engine, sin Repair. La investigación forense permitió derivar la mayor parte del modelo con evidencia directa del código; **una dimensión — bot ownership — depende de un hecho de producto que el repositorio no puede resolver por sí solo** y queda escalada.
+
+### FACT — evidencia reconstruida del flujo real
+
+**F1 — Flujo end-to-end reconstruido, frontera por frontera.** `ExecutionRequest` (dominio, `order_id: str` sin generador) → `BybitExecutionGateway.execute()` → `_to_bybit_request` (valida `len(order_id)<=36`, construye `BybitCreateOrderRequest` con `order_link_id=request.order_id`) → `BybitDemoClient.place_order` → `BybitCreateOrderOperation.execute` (`payload_builder` puro → `endpoint_executor.execute` — **la única llamada de red real** → `response_interpreter.interpret`) → de vuelta a `execute()`, que traduce el resultado a `ExecutionResult` o lo clasifica como rechazo/infraestructura.
+
+**F2 — Ante fallo de transporte, hoy no se registra absolutamente nada.** `_TRANSPORT_FAILURES = (OSError, BybitResponseProcessingError)` se captura en `execute()` y se relanza como `ExecutionInfrastructureError` — **nada se escribe antes de la llamada remota, nada después del fallo**. Confirma y profundiza ADR-007 F7: la ambigüedad de una orden con respuesta perdida no está mal representada, está **completamente perdida**.
+
+**F3 — La clasificación remota ya distingue tres categorías, no dos.** `_ORDER_REJECTION_RET_CODES = {10001, 110003, 110004, 110007}` — sólo estos `ret_code` producen `ExecutionResult(status="rejected")`, un hecho **REMOTE definitivo negativo**. Cualquier otro `BybitApiError` (autenticación, firma, rate-limit, servidor) se clasifica **conservadoramente** como `ExecutionInfrastructureError` — ni éxito ni rechazo de negocio. Sumado a la verificación de `orderLinkId` post-ACK (`if result.order_link_id != request.order_id: raise ExecutionInfrastructureError`), hay **cuatro** rutas de código distintas que hoy colapsan en el mismo "no sabemos": fallo de transporte, respuesta malformada, `ret_code` ambiguo, y `orderLinkId` no coincidente. Las cuatro comparten la misma consecuencia semántica (Phoenix no puede afirmar aceptación ni rechazo) pero son diagnósticamente distintas y hoy **ninguna deja rastro**.
+
+**F4 — El tiempo remoto del ACK ya tiene un significado establecido y verificado, no es un misterio.** `BybitResponse.time_ms` (parseado por `bybit_response_parser.py:38`, descartado por el interpreter de create-order) es **el mismo campo, con el mismo significado**, que ya alimenta `server_time_ms` en los cuatro interpreters del read-side (`response.time_ms` → `server_time_ms` verificado literalmente en `bybit_positions_response_interpreter.py:126`, `bybit_open_orders_response_interpreter.py:161`, `bybit_wallet_balance_response_interpreter.py:198`, `bybit_instrument_metadata_response_interpreter.py:217`). No es un timestamp de creación de orden — es el tiempo de generación de la respuesta del gateway de Bybit, genérico a todo el envelope v5. Capturarlo para el Ledger no es inventar semántica: es aplicar una semántica **ya aceptada en cuatro contratos productivos**.
+
+**F5 — `MillisecondClock` es un Protocol genérico con un solo consumidor hoy, no una abstracción HMAC-específica.** `MillisecondClock.now_ms() -> int` (`Protocol`, `@runtime_checkable`) se usa exclusivamente en `standard_bybit_authenticator.py` para el timestamp de firma — pero el Protocol en sí no tiene ninguna dependencia de autenticación; es genéricamente inyectable.
+
+**F6 — No existe infraestructura para modelar fills discretos.** El read-side no tiene ninguna primitiva de ejecuciones/trades (`/v5/execution/list` no está implementado); `ExecutionOpenOrder.filled_quantity` es una lectura acumulada punto-en-el-tiempo desde Open Orders, no un stream de fills individuales.
+
+**F7 — No existen primitivas de cancelación ni de amend.** `grep` de `cancel`/`amend`/`modify` sobre `platform/execution_gateway/` no devuelve ningún archivo productivo.
+
+**F8 — `phoenix_core` sigue siendo un bounded context frozen y disjunto.** `Order`/`Trade`/`Signal` (`phoenix_core`) autogeneran `bot_id`/`signal_id`/`trade_id`/`order_id`/`timestamp` vía `default_factory` dentro del propio dataclass — exactamente el patrón que ADR-009 D7 rechazó para `execution_gateway` ("los contratos reciben identidades, nunca las generan"). `bot_id` mide 40 caracteres (`bot_` + UUID4 canónico). `execution_gateway` sigue sin importar `phoenix_core` en ningún archivo productivo.
+
+**F9 — `ExpectedExecutionState`/`ExchangeStateSnapshot` no importan ni conocen nada de eventos/Ledger.** Confirmado por lectura directa de ambos módulos — ninguna dependencia nueva que romper.
+
+**F10 — Phoenix anticipa explícitamente un futuro Dashboard.** `docs/architecture.md` §3 lista `Future: Dashboard [NOT YET IMPLEMENTED]` junto a Bot SDK/Portfolio Orchestrator/Market Regime Engine. Un dashboard típicamente implica acciones disparadas por un humano, no por un bot — dato relevante para la pregunta de si toda orden futura estará necesariamente atribuida a un bot (ver DECISION/bloqueo más abajo).
+
+### DECISION — lo que se deriva sin ambigüedad material
+
+**D1 — Tres autoridades (LOCAL/REMOTE/OBSERVED) siguen siendo suficientes, y son propiedad del TIPO de evento, no de un campo libre del envelope.** Mutuamente excluyentes **por evento** (nunca por orden completa — la misma orden acumula hechos de las tres autoridades a lo largo de su vida). REMOTE puede confirmar algo que nunca tuvo un intento LOCAL correlacionado sólo en el sentido de que Phoenix puede *descubrir* después (OBSERVED) una orden cuyo LOCAL/REMOTE se perdió — pero la autoridad de cada hecho individual sigue siendo unívoca. Codificar la autoridad como el tipo Python (no un string/enum en el envelope) es la misma filosofía ya aplicada con éxito en `Divergence` (ADR-005, Decisión 7) — no una decisión nueva sino la aplicación del mismo principio ya validado.
+
+**D2 — Intent y Attempt colapsan en un único hecho para V1: `OrderSubmissionAttempted` (LOCAL).** No hay evidencia en el código de una separación real entre "Phoenix decidió" y "Phoenix intentó" — `ExecutionRequest` se construye y se pasa a `execute()` en la misma operación síncrona, sin ningún punto de persistencia intermedio. Inventar una fase "Intent" separada sin evidencia de que exista hoy sería diseñar de más. Este hecho se registra **antes** de la llamada remota (satisface ADR-007 D2), contiene los parámetros económicos completos de la orden, y es el único punto de entrada de una nueva orden al Ledger.
+
+**D3 — La incertidumbre es un HECHO explícito, no sólo la ausencia de un resultado.** Dos formas de "no sabemos" son genuinamente distintas: (a) silencio — todavía no existe ningún hecho de resultado, estado ambiental por defecto, no requiere ningún evento; (b) `OrderSubmissionOutcomeUnknown` (LOCAL) — Phoenix's propio proceso detectó, de forma síncrona, que no puede afirmar aceptación ni rechazo (cualquiera de las 4 rutas de F3). Este segundo hecho **sí** merece un evento propio: es información real que hoy se descarta (F2), y preservarla es lo único que permite distinguir "seguimos esperando" de "sabemos que la llamada falló, aunque no sepamos qué hizo Bybit." El evento lleva una categoría descriptiva de la indeterminación (transporte / respuesta malformada / `ret_code` ambiguo / `orderLinkId` no coincidente) — un HECHO sobre lo ocurrido, nunca una decisión (`should_retry` y similares quedan explícitamente prohibidos, consistente con §29).
+
+**D4 — Append-only significa que un hecho histórico nunca se modifica, borra ni reemplaza; la corrección es un hecho nuevo.** Ejemplo del propio prompt: `t0 attempt`, `t1 unknown`, `t2 observed open` — los tres permanecen; `OrderObservedOpen` no reescribe `OrderSubmissionOutcomeUnknown`, lo complementa. V1 no necesita un mecanismo formal de "evento de corrección" — un hecho nuevo que aporta más información es suficiente y es el patrón mínimo. (Nota de consistencia, no evidencia: es el mismo principio de nunca reescribir historia que ya rige `docs/progress.md`.)
+
+**D5 — `ExecutionAccountId` vive en el envelope, universal y obligatorio; `ExecutionOrderId` vive en el payload, específico por tipo.** Toda cuenta debe poder filtrarse/auditarse sin depender de topología de almacenamiento futura (justifica envelope). No todo evento tiene una orden asociada — llenar el envelope con un campo casi-siempre-presente-pero-a-veces-no violaría el patrón ya establecido de no añadir campos opcionales sin necesidad (ADR-004, ADR-005).
+
+**D6 — Identidad del propio evento: value object local, formato deliberadamente sin congelar.** No hay ninguna frontera externa que el `event_id` deba cruzar (a diferencia de `ExecutionOrderId`/Bybit) — por tanto no hay restricción externa que derivar. Reutilizar `phoenix_core.ids.event_id()` violaría el mismo aislamiento de bounded context ya verificado por AST en 3.81 (F8). El patrón correcto, por analogía directa con `ExecutionAccountId`, es: un tipo opaco local, **recibido, nunca autogenerado en `__post_init__`**, con un generador explícito separado — sin congelar el formato textual exacto todavía, exactamente como `ExecutionAccountId` (ADR-009 OQ1) dejó su formato abierto por la misma razón (ausencia de autoridad/necesidad).
+
+**D7 — `event_id` NO es una idempotency key.** Identifica el *registro* de un hecho, no el *hecho del mundo real* que describe — un mismo ACK remoto procesado dos veces produciría dos `event_id` distintos, así que usar `event_id` para detectar duplicación nunca detectaría nada. Una futura clave de deduplicación tendría que derivarse del *contenido* del hecho (p. ej. `(execution_order_id, exchange_order_id)` para un ACK), no de su identidad de registro. Se documenta como deuda explícita — el esquema exacto depende de un escritor real que todavía no existe.
+
+**D8 — Semántica temporal: dos campos, ninguno inventado.** `occurred_at_ms` — el instante local que Phoenix registra vía el `MillisecondClock` Protocol ya existente (F5), reutilizado para un propósito de dominio nuevo sin conflicto porque el Protocol nunca fue HMAC-específico; universal, presente en todo evento. `server_time_ms` — presente únicamente en hechos REMOTE/OBSERVED (los que involucran una respuesta real de Bybit), con el significado **ya establecido y verificado** en F4 — cierra explícitamente la deuda que ADR-007 F6/ADR-009 dejaron abierta ("¿debe capturarse el ACK time?": sí, porque no es semánticamente nuevo, es el mismo campo que Phoenix ya modela en cuatro contratos aceptados). No se agrega `effective_at`: esa noción pertenece a la revisión de una Projection publicada (D11), no a un hecho crudo del Ledger.
+
+**D9 — Ordering: lógicamente por cuenta de ejecución, mecanismo de asignación deliberadamente diferido.** Timestamp solo no basta (lección ya aprendida en ADR-006 D3: dos hechos pueden compartir milisegundo). El ámbito correcto es **por `ExecutionAccountId`**, no global ni por orden: toda la arquitectura aceptada hasta ahora (wrappers de 3.81, Reconciliation) ya opera exclusivamente dentro del alcance de una cuenta — no hay ninguna necesidad evidenciada de ordenar eventos entre cuentas distintas entre sí. El *mecanismo* concreto de asignación (entero autoincremental, offset de log, otro) depende de una tecnología de almacenamiento que este hito explícitamente no elige — se documenta como requisito lógico, no como campo congelado.
+
+**D10 — Revisión: pertenece a la Projection, no al Ledger — reafirmación, no decisión nueva.** Ya establecido en ADR-006 ("provenance sigue de la autoridad que computa la proyección") y ADR-007. El Ledger aporta la materia prima ordenada; la Projection deriva de ahí una identidad de revisión y su provenance temporal. Ningún evento del Ledger necesita un campo de "revisión" propio.
+
+**D11 — Envelope mínimo propuesto (4 campos, cada uno justificado por evidencia, ninguno copiado del ejemplo ilustrativo del prompt):** `event_id` (D6), `execution_account_id` (D5), `occurred_at_ms` (D8), `payload` (específico por tipo — incluye `execution_order_id` cuando aplica, `server_time_ms` cuando la autoridad es REMOTE/OBSERVED, y bot ownership cuando esté disponible y decidido — ver bloqueo). Deliberadamente **sin** un campo `sequence` congelado en el envelope lógico (D9) y **sin** `ExchangeAccountIdentity` (esa es responsabilidad del futuro Account Registry, ADR-009 D7, no de cada evento).
+
+**D12 — Cinco tipos de evento V1, todos order-scoped, cada uno justificado por un hecho realmente distinto en el flujo reconstruido (F1-F3):** `OrderSubmissionAttempted` (LOCAL, D2), `OrderSubmissionOutcomeUnknown` (LOCAL, D3), `OrderAcceptedByExchange` (REMOTE — `ret_code==0`, `orderLinkId` verificado, payload incluye `exchange_order_id`+`server_time_ms`), `OrderRejectedByExchange` (REMOTE — `ret_code` en el conjunto de rechazo, payload incluye motivo+`server_time_ms`), `OrderObservedOpen` (OBSERVED — lectura posterior de Open Orders que correlaciona por `order_id`==`orderLinkId`, payload incluye el estado observado tal cual + `server_time_ms` del snapshot). Ningún tipo de evento a nivel de cuenta en V1: no hay evidencia de necesidad no cubierta ya por `ExchangeStateSnapshot`/Reconciliation V1 (F9). Sin taxonomía de fills (F6) ni de cancel/amend (F7) — deferidos explícitamente, no omitidos por descuido.
+
+**D13 — Representación: un dataclass frozen por tipo de evento, bajo una clase marcadora no instanciable — mismo patrón que `Divergence` (ADR-005, Decisión 7).** Es la estrategia con más precedente directo y exitoso en este repositorio (`Divergence`, `ExpectedPosition`/`ExpectedOpenOrder`, las tres identidades de 3.81) — preferida explícitamente sobre `dict[str, Any]` o un enum+payload genérico por seguridad de tipos, exhaustividad testeable y consistencia. Inmutabilidad: `frozen=True` + preferencia por `tuple`/dataclasses anidados sobre `dict`/`list` mutables en cualquier payload, replicando el patrón ya usado en todo el resto de `execution_gateway`.
+
+**D14 — Seguridad: ningún evento porta `api_key`/`api_secret`/firma/headers de autenticación/cuerpo HTTP crudo.** El patrón ya establecido en todo el codebase (`BybitCreateOrderResult` sólo transporta `orderId`/`orderLinkId`, nunca el dict crudo de respuesta) se extiende sin cambios: los payloads del Ledger son dominio mínimo, no espejos de la respuesta remota.
+
+**D15 — Fallos ledger-worthy vs. propagación interna.** Ledger-worthy: las 4 rutas de F3 (→ `OutcomeUnknown`), rechazo de negocio (→ `RejectedByExchange`), aceptación (→ `AcceptedByExchange`), descubrimiento posterior (→ `ObservedOpen`). NO ledger-worthy: fallos de validación local de `ExecutionRequest.__post_init__` (ocurren antes de que exista ninguna orden que correlacionar, nada se intentó transmitir) y el chequeo de longitud en `_to_bybit_request` (adaptación local pre-transmisión — y una vez `ExecutionRequest` migre a `ExecutionOrderId` en un hito futuro, este caso se vuelve estructuralmente imposible por construcción). Ambos siguen propagando como excepción, exactamente como hoy.
+
+**D16 — Relación con Reconciliation V1: cero acoplamiento nuevo, reafirmado.** `Ledger → Projection Engine → AccountScopedExpectedExecutionState` (más el ya existente `AccountScopedExchangeStateSnapshot`) `→ reconcile_account_scoped_execution_state`. Reconciliation nunca lee el Ledger directamente. Confirmado por lectura directa: no se toca `reconciliation_engine.py` ni `account_scoped_reconciliation.py` en este hito, ninguna razón estructural lo exige.
+
+### NOT IMPLEMENTED
+
+Ningún contrato, ningún tipo de evento, ningún storage físico, ningún Projection Engine, ningún Account Registry, ninguna llamada real a Bybit, ningún mecanismo de asignación de `sequence`, ningún formato congelado de `event_id`, ningún esquema de deduplicación por contenido, ninguna migración de `order_id: str` a `ExecutionOrderId` en los contratos de write-side, ningún cambio a `phoenix_core`, `ExpectedExecutionState`, `ExchangeStateSnapshot`, `reconciliation_engine.py` o `account_scoped_reconciliation.py`.
+
+### OPEN QUESTIONS
+
+**OQ1 — BLOQUEO: bot ownership. Decisión mínima requerida de la directora del proyecto.**
+
+**HECHO:** No existe hoy ningún concepto de `bot_id` en `execution_gateway` (F8, cero ocurrencias fuera de prosa explicando su ausencia deliberada). `phoenix_core.bot_id` es un bounded context frozen y disjunto, con el mismo problema de aislamiento que ya se resolvió (no reutilizar) para `order_id`. `docs/architecture.md` anticipa explícitamente un futuro Dashboard (F10) — típicamente humano-disparado, no bot-disparado.
+
+**AMBIGÜEDAD:** Dos preguntas genuinamente no derivables del repo: (1) ¿qué tipo/formato representa la identidad de bot dentro de `execution_gateway`? (2) ¿la atribución por bot es **obligatoria** en `OrderSubmissionAttempted` (asumiendo que toda orden futura se origina en un bot) u **opcional** (dejando espacio para un futuro flujo manual/Dashboard)?
+
+**OPCIÓN A — Mintar `ExecutionBotId` ahora, análogo estructural a `ExecutionAccountId`, campo OPCIONAL en el payload de `OrderSubmissionAttempted`.**
+Ventajas: consistente con el patrón ya validado (recibido, no generado; formato sin congelar); no bloquea ningún flujo futuro (manual u originado por bot); cierra la pregunta de tipo ahora.
+Riesgos: si Phoenix nunca soporta órdenes no-bot, un campo opcional sería una garantía más débil de la necesaria — "todo evento LOCAL debería tener bot" quedaría sin exigir.
+
+**OPCIÓN B — Mintar `ExecutionBotId` ahora, campo OBLIGATORIO en `OrderSubmissionAttempted`.**
+Ventajas: invariante más fuerte, útil si Phoenix efectivamente nunca tendrá órdenes no-bot.
+Riesgos: precluiría estructuralmente cualquier futuro flujo manual/Dashboard sin una migración de contrato — y el propio `architecture.md` ya anticipa un Dashboard futuro (F10), lo que sugiere que esta exclusión podría ser prematura.
+
+**OPCIÓN C — No mintar ningún tipo todavía; dejar bot ownership como pregunta abierta sin nombre de tipo, deferida por completo al hito que implemente el Ledger.**
+Ventajas: cero compromiso prematuro; máxima flexibilidad.
+Riesgos: si la respuesta termina siendo "sí, minten `ExecutionBotId` opcional," este hito ya tenía evidencia suficiente para haberlo dicho — deferir de más también tiene costo.
+
+**RECOMENDACIÓN:** Opción A. Es la que preserva más opcionalidad futura al menor costo, es coherente con el patrón `ExecutionAccountId` ya aceptado, y no cierra la puerta al Dashboard que el propio repositorio ya anticipa. Pero esto es una decisión de forma de producto, no una derivación de evidencia — se presenta como recomendación, no como decisión tomada unilateralmente.
+
+**OQ2 — `strategy_id`:** sin evidencia de necesidad inmediata (§12 del prompt); no se inventa. Si en el futuro se necesita, la relación natural sería `bot_id → strategy/version` resuelta en otro registro, no un campo nuevo en cada evento.
+
+**OQ3 — Mecanismo de asignación de `sequence` (D9):** depende de la tecnología de almacenamiento, explícitamente fuera de alcance de este hito.
+
+**OQ4 — Formato textual de `event_id` (D6):** deliberadamente sin congelar, mismo tratamiento que `ExecutionAccountId` (ADR-009 OQ1).
+
+**OQ5 — Esquema de deduplicación por contenido (D7):** depende de un escritor real todavía inexistente.
+
+**Archivos modificados:** ninguno de producción. **Tests nuevos:** ninguno. **Suite:** 6017 passing, sin cambio.
+**Sin conexión real con Bybit; sin Railway; sin storage; sin Projection Engine; sin Repair.**
+**Hito 3.82 — ARCHITECTURAL DECISION REQUIRED** sobre bot ownership (OQ1); el resto del modelo lógico del Execution Ledger Event Model queda documentado y derivado de evidencia.
