@@ -592,6 +592,50 @@ class TestOrderObservedOpen:
 
 
 # ---------------------------------------------------------------------------
+# execution_order_id: type-safety sistemática y simétrica entre los cinco
+# tipos de evento order-scoped (cierre del hallazgo IMPORTANTE de la
+# auditoría adversarial independiente post-3.83: OrderSubmissionOutcomeUnknown
+# y OrderRejectedByExchange carecían de esta cobertura conductual, pese a
+# que la producción ya validaba correctamente en las cinco clases -- hueco
+# de cobertura, nunca un defecto de comportamiento, confirmado
+# manualmente antes de escribir cualquier test nuevo).
+#
+# Parametrizado por (builder, bad_value) para que un fallo señale sin
+# ambigüedad CUÁL de los cinco tipos dejó de validar -- nunca origen por
+# inspección de fuente.
+# ---------------------------------------------------------------------------
+
+_EVENT_ORDER_ID_BUILDERS = {
+    "OrderSubmissionAttempted": _attempt,
+    "OrderSubmissionOutcomeUnknown": _unknown,
+    "OrderAcceptedByExchange": _accepted,
+    "OrderRejectedByExchange": _rejected,
+    "OrderObservedOpen": _observed,
+}
+
+_BAD_EXECUTION_ORDER_IDS = [None, "ord_" + "a" * 32, 123, True, 1.5, b"x", object()]
+
+
+class TestExecutionOrderIdTypeSafetyAcrossAllEventTypes:
+    @pytest.mark.parametrize("event_name", list(_EVENT_ORDER_ID_BUILDERS))
+    @pytest.mark.parametrize("bad_value", _BAD_EXECUTION_ORDER_IDS,
+                             ids=[repr(v) for v in _BAD_EXECUTION_ORDER_IDS])
+    def test_rejects_non_execution_order_id_value(self, event_name, bad_value):
+        builder = _EVENT_ORDER_ID_BUILDERS[event_name]
+        with pytest.raises(TypeError):
+            builder(execution_order_id=bad_value)
+
+    @pytest.mark.parametrize("event_name", list(_EVENT_ORDER_ID_BUILDERS))
+    def test_accepts_valid_execution_order_id_by_identity(self, event_name):
+        builder = _EVENT_ORDER_ID_BUILDERS[event_name]
+        marker = ExecutionOrderId(value="ord_" + "b" * 32)
+        event = builder(execution_order_id=marker)
+        # Preservación por identidad de objeto (`is`), no sólo equality --
+        # confirma que el contrato no reconstruye ni copia el value object.
+        assert event.execution_order_id is marker
+
+
+# ---------------------------------------------------------------------------
 # Autoridad -- estructural, no configurable
 # ---------------------------------------------------------------------------
 
