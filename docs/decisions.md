@@ -1005,3 +1005,142 @@ Riesgos: un Writer en memoria **viola D1 por definición** y no puede satisfacer
 **Archivos de producción modificados:** ninguno. **Tests productivos nuevos:** ninguno. **Suite:** 6189 passing, sin cambio.
 **Sin conexión real con Bybit (las verificaciones externas fueron exclusivamente contra documentación oficial y sockets locales); sin Railway; sin storage; sin Writer; sin recovery; sin Projection; sin Repair.**
 **Hito 3.84 — STOP: DECISIÓN REQUERIDA** sobre topología de durabilidad y SLA (única dimensión escalada); el resto de la frontera Writer/Durability queda diseñado y derivado de evidencia. **STOP resuelto por la directora el 2026-09-11 (Opción B, PostgreSQL) — ver "Resolución del STOP" arriba; no implementado.**
+
+---
+
+## ADR-012 — Closed Order Observation Semantics: un único `OrderObservedClosed` (OBSERVED) con estado remoto cerrado y agregados de ejecución a nivel de orden; bloqueado en la dependencia del endpoint histórico y el horizonte de recovery
+
+**Fecha:** 2026-09-13
+**Contexto:** Hito 3.85. ADR-011 D10/OQ2 dejó identificado el hueco de recovery más grave: tras `Attempted` (con o sin `Unknown`), una orden ejecutada por Bybit con respuesta perdida sólo puede *observarse* como cerrada, y los cinco tipos de evento V1 (Hito 3.83) no pueden representar ese hecho. Este hito diseña — y congela donde la evidencia lo permite — el evento mínimo para una orden encontrada **cerrada** durante observación o recovery. Diseño forense únicamente: cero producción, cero tests, sin PostgreSQL, sin Writer, sin integración, sin recovery worker. ADR-010 y ADR-011 no se modifican.
+
+### FACT — evidencia verificada contra documentación oficial de Bybit y contra el repo
+
+**F1 — `orderStatus`, enumeración oficial (`docs/v5/enum`).** *Open:* `New` ("order has been placed successfully"), `PartiallyFilled`, `Untriggered` ("Conditional orders are created"). *Closed:* `Rejected`, `PartiallyFilledCanceled` (**"Only spot has this order status"**), `Filled`, `Cancelled` (**"In derivatives, orders with this status may have an executed qty"**), `Triggered` ("instantaneous state for conditional orders from Untriggered to New"), `Deactivated` ("UTA: Spot tp/sl order, conditional order, OCO order are cancelled before they are triggered"). Consecuencia directa: **"closed" no significa "filled", y "cancelled" no significa "nada ejecutado"** — la magnitud de ejecución es `cumExecQty`, independiente del estado.
+
+**F2 — Estados cerrados alcanzables por una orden Phoenix.** `ExecutionRequest` sólo admite `market`/`limit` (`contracts.py`), `BybitExecutionGateway` nunca envía órdenes condicionales/TP-SL/OCO, y Phoenix opera únicamente `category=linear`. Por tanto, de los seis estados cerrados, **sólo tres pueden ocurrir para una `ExecutionOrderId` propia: `Filled`, `Cancelled`, `Rejected`**. `Deactivated` (sólo condicionales), `PartiallyFilledCanceled` (sólo spot) y `Triggered` (transitorio, y ya tratado como *abierto* por el read-side desde la corrección post-3.71) son **estructuralmente imposibles** para una orden Phoenix; su aparición correlacionada con un `orderLinkId` propio sería una violación de invariante, nunca un caso a mapear.
+
+**F3 — Campos oficiales de `GET /v5/order/realtime` y `GET /v5/order/history` (idénticos en lo relevante).** `cumExecQty` "Cumulative executed order qty"; `cumExecValue` "Cumulative executed order value"; `avgPrice` "Average filled price, **returns "" for those orders without avg price**"; `leavesQty` "The remaining qty not executed"; `rejectReason` "Reject reason"; `cancelType` "Cancel type"; `createdTime` "**Order created** timestamp (ms)"; `updatedTime` "**Order updated** timestamp (ms)"; `cumExecFee` "linear, spot: **Deprecated**. Use cumFeeDetail instead". Ninguno de los dos timestamps se documenta como "fill time". `cancelType` y `rejectReason` son enumeraciones extensas, mayoritariamente de opciones/UTA, sin garantía de estabilidad.
+
+**F4 — La caché de órdenes cerradas de `realtime` es VOLÁTIL.** `openOnly=1`: "Query max recent 500 closed status records per account/category" y, literal: **"If Bybit service restarts due to update, this data clears and accumulates again, but order records queryable in order history."** `realtime` no es una fuente durable para recovery: la ventana de 500 puede ser cero tras un reinicio de Bybit.
+
+**F5 — `GET /v5/order/history` es la fuente durable, con retención asimétrica.** Filtra por `orderLinkId`. Retención oficial: **últimas 24 h** para `Cancelled` totalmente cancelada (sin fills), `Rejected` y `Deactivated`; **últimos 7 días** para el resto de estados cerrados; **más allá de 7 días, sólo órdenes con fills** (total o parcialmente ejecutadas). Span máximo por consulta: 7 días. Advertencia oficial de latencia: "As order creation/cancellation is asynchronous, the data returned from this endpoint may delay." Consecuencia: **el caso económicamente peligroso (hubo ejecución) es el de mayor retención; el caso inerte (cero ejecución) caduca en 24 h.**
+
+**F6 — Lo que el repo ya modela y su vocabulario.** `ExecutionOpenOrder` (3.71) y `OrderObservedOpen` (3.83) aceptan exclusivamente `{new, partially_filled, untriggered, triggered}` — los terminales quedaron **fuera de scope explícitamente** ("No se agregan estados terminales (Filled/Cancelled/Rejected)", `open_orders_contracts.py:15`). El interpreter lee `cumExecQty` → `filled_quantity`; **no** lee `cumExecValue`, `avgPrice`, `leavesQty`, `rejectReason`, `cancelType`, `createdTime` ni `updatedTime`. Vocabulario ya congelado en contratos aceptados: `filled_quantity` (`ExecutionOpenOrder`, `OrderObservedOpen`, `ExecutionResult`) y `average_price` (`ExecutionResult`). No existe ninguna primitiva de fills ni `/v5/execution/list` (ADR-010 F6, reconfirmado).
+
+**F7 — OQ6 de ADR-010 fijó el patrón de correlación:** `OrderObservedOpen` exige `ExecutionOrderId` **y** `exchange_order_id`, ambos obligatorios; huérfanas fuera; `exchange_order_id` nunca fallback. `OrderSubmissionOutcomeUnknown.reason` (3.83) es el precedente aceptado de **conjunto cerrado de categorías descriptivas en el payload** — un hecho sobre lo ocurrido, no una decisión.
+
+### DECISION — lo que se deriva sin ambigüedad material
+
+**D1 — Taxonomía: un único tipo `OrderObservedClosed`, no tres.** La pregunta correcta no es "¿son distintos Filled/Cancelled/Rejected?" sino "¿exige un consumidor comportamiento estructuralmente distinto por cada uno?". Para la Projection los tres son idénticos en estructura: **la orden es terminal (absorbente, no cambia más) y se aplica `filled_quantity`**. La diferencia entre ellos es *diagnóstica* (por qué cerró), no *operacional* (qué hacer). Un tipo por estado (`OrderObservedFilled`/`OrderObservedCancelled`/`OrderObservedRejected`) fallaría exactamente en el caso obligatorio de §6: una LIMIT parcialmente ejecutada y cancelada es *ambas cosas* — un tipo llamado "Cancelled" ocultaría la ejecución y uno llamado "Filled" mentiría. El estado remoto va al payload como **conjunto cerrado de tres valores validado con invariantes cruzadas** (D3), el mismo patrón que `OrderSubmissionOutcomeUnknown.reason` (F7). No traslada ambigüedad al payload: cada valor tiene una invariante verificable contra `filled_quantity`, y el conjunto es exhaustivo por F2. El patrón de marcador-por-tipo (ADR-005/ADR-010) se reserva para clasificaciones que cambian el comportamiento del consumidor — aquí la autoridad (OBSERVED) sí es tipo; el motivo de cierre no.
+
+**D2 — Autoridad: OBSERVED, coherente con `OrderObservedOpen`; no hay inconsistencia conceptual.** *Fuente de descubrimiento* (read-side GET) y *autoridad del hecho* (Bybit lo afirma) son distintas, y ADR-010 D1 ya las separó: REMOTE es la respuesta **síncrona** de Bybit a la **propia** submisión de Phoenix — Phoenix presenció la cadena causal `request → response`; OBSERVED es estado de Bybit **descubierto después y correlacionado por identidad**, sin haber presenciado la causa. Ambos provienen de Bybit; la diferencia es el testimonio causal, no el origen. `OrderObservedClosed` es `ObservedFact`. La única diferencia real con `OrderObservedOpen` es la **estabilidad** del hecho (terminal vs. snapshot), que no es autoridad — y que es exactamente lo que D12 explota para idempotencia.
+
+**D3 — Estado remoto: `remote_status ∈ {"filled", "cancelled", "rejected"}`, con invariantes cruzadas obligatorias.** `filled` ⇒ `filled_quantity == quantity`; `rejected` ⇒ `filled_quantity == 0`; `cancelled` ⇒ `0 <= filled_quantity < quantity` (una cancelada con ejecución completa sería `Filled` por definición de Bybit). `Deactivated`, `PartiallyFilledCanceled` y `Triggered` **rechazados** (F2): el interpreter falla cerrado ante ellos; el contrato no los admite. `average_price`: `None` ⇔ `filled_quantity == 0`; `> 0` ⇔ `filled_quantity > 0` (F3: Bybit devuelve `""` sin ejecución). `filled_value >= 0`, y `== 0` ⇔ `filled_quantity == 0`.
+
+**D4 — "Filled" NO es un Fill Ledger: lo que Phoenix puede y no puede afirmar.** Con `orderStatus == Filled` Phoenix afirma únicamente: *"el exchange reporta esta orden cerrada como llenada, con cantidad ejecutada acumulada X, valor ejecutado acumulado V y precio medio P, tal como los reporta el exchange a nivel de orden"*. Phoenix **no** afirma: ejecuciones individuales, sus timestamps, fees por ejecución (`cumExecFee` está deprecado para linear, F3 — **rechazado**), maker/taker, ni atribución de trades. Los agregados acumulados son **atributos de la orden** que Bybit reporta, no un stream de ejecuciones — llevarlos no convierte el evento en Fill Ledger; decomponerlos sí lo haría, y no existe primitiva para ello (F6). El docstring del contrato lo declara.
+
+**D5 — Fills parciales: el hecho de ejecución parcial se preserva sin inventar fills.** LIMIT parcialmente ejecutada y cancelada → `remote_status="cancelled"`, `filled_quantity=0.4`, `quantity=1.0`, `filled_value`, `average_price` presentes. La Projection aplica `filled_quantity` a la posición esperada y cierra la orden. `leaves_qty` **rechazado** del payload: es derivable (`quantity − filled_quantity`) y almacenarlo crea una obligación de consistencia sin aportar hecho nuevo; el interpreter **puede** cruzarlo contra Bybit en la frontera y fallar cerrado ante discrepancia (mismo patrón que las verificaciones de 3.71), pero no es campo del contrato.
+
+**D6 — Identidades: `execution_order_id` y `exchange_order_id` ambos obligatorios; huérfanas fuera; nunca fallback.** Idéntico a la resolución de OQ6 (F7). Una orden cerrada encontrada por `orderLinkId` es, por construcción, correlacionada. El evento además lleva `symbol`/`side`/`order_type`/`quantity`/`price`/`reduce_only` — no por redundancia con `Attempted`, sino para que cada evento sea autodescriptivo en replay y para que la Projection pueda **detectar contradicción** entre lo intentado y lo observado (colisión de identidad u orden ajena): esa detección es responsabilidad de la Projection, no de este contrato.
+
+**D7 — Tiempos: cuatro, ninguno llamado "fill time".** `occurred_at_ms` — envelope, reloj local de Phoenix al registrar la observación (ADR-010 D8). `server_time_ms` — `BybitResponse.time_ms` del GET, misma semántica que todo el read-side (ADR-010 F4). `remote_created_time_ms` — `createdTime`, "Order created timestamp": hecho remoto sobre la orden, útil para correlar con el `occurred_at_ms` del `Attempted`. `remote_updated_time_ms` — `updatedTime`, "Order updated timestamp": para una orden terminal es, en la práctica, el último cambio, **pero Bybit no lo documenta como tiempo de fill ni de cierre** — el contrato lo nombra como lo que es y su docstring prohíbe la reinterpretación. `committed_at_ms` (futuro Writer) queda fuera del payload. Los cuatro son enteros no negativos; los dos remotos son **obligatorios** (Bybit los reporta siempre para una orden; su ausencia es respuesta malformada → fallo cerrado en el interpreter).
+
+**D8 — Payload mínimo, campo por campo.** REQUIRED: `execution_order_id` (D6) · `exchange_order_id` (D6) · `symbol`, `side`, `order_type`, `quantity`, `reduce_only` (D6, autodescripción/contradicción) · `remote_status` (D3) · `filled_quantity` (`cumExecQty`; vocabulario ya congelado, F6) · `filled_value` (`cumExecValue`; notional ejecutado, `>= 0`) · `server_time_ms` (D7) · `remote_created_time_ms`, `remote_updated_time_ms` (D7). OPTIONAL: `price` (`None` para market, igual que `OrderObservedOpen`) · `average_price` (`avgPrice`; acoplado a `filled_quantity` por D3; vocabulario de `ExecutionResult`) · `cancel_type` (`cancelType`, **verbatim**, `str` no vacío cuando presente; `None` obligatorio si `remote_status != "cancelled"`; no se congela enumeración — F3: extensa, mayoritariamente de opciones, sin garantía de estabilidad; es diagnóstico preservado, nunca clasificación sobre la que Phoenix actúe, mismo tratamiento que `ret_msg`) · `reject_reason` (`rejectReason`, verbatim, `None` cuando ausente o `"EC_NoError"`; **sin** acoplamiento estricto a `remote_status` porque la propia taxonomía de Bybit lo usa también en cancelaciones, p. ej. `EC_CancelByOrderValueZero`). REJECTED: `leaves_qty` (D5) · `cum_exec_fee` (deprecado, D4) · `leavesValue` (derivado/estimado) · `triggerPrice`/`stopOrderType`/`closeOnTrigger` (condicionales, imposibles por F2) · cualquier campo de `ExecutionLedgerEvent`/Writer (`sequence`, `committed_at_ms`) · el dict crudo de Bybit (ADR-010 D14).
+
+**D9 — `Unknown → ObservedClosed`: complementa, no resuelve; regla de Projection.** Append-only (ADR-010 D4): `Unknown` nunca se borra ni se transforma. Secuencia `[Attempted, Unknown, ObservedClosed]`: la Projection deriva el estado actual de la orden del **último hecho terminal** (REMOTE `Rejected` u OBSERVED `Closed`) en `sequence`; `Unknown` permanece como historia auditable ("en `t1` Phoenix no sabía"), y el intervalo entre `Unknown` y `ObservedClosed` es la **ventana de incertidumbre real**, medible a posteriori. Regla general: un hecho terminal es **absorbente** — ningún evento posterior para la misma orden puede reabrirla; si llegara uno (p. ej. un `ObservedOpen` tardío por latencia de Bybit, F5), la Projection lo trata como contradicción, no como transición.
+
+**D10 — `Attempted → ObservedClosed` sin `Unknown`: representable sin inventar nada.** Caso crash (ADR-011 F2/F3/F5/F6): `[Attempted, ObservedClosed]`. **Prohibido** un `Unknown` retroactivo — sería un hecho LOCAL fabricado sobre un instante en que el proceso no existía. La *ausencia* de `Accepted`/`Unknown` entre ambos es en sí la evidencia de la ventana de crash; la Projection puede señalarla, y el `remote_created_time_ms` (D7) permite acotar cuándo Bybit realmente recibió la orden.
+
+**D11 — `Accepted → ObservedClosed`: el mismo evento; no es un evento de error.** Ciclo normal futuro: `[Attempted, Accepted, ObservedClosed]`. `OrderObservedClosed` es la observación ordinaria de que una orden terminó — el nombre y el docstring **no** mencionan recovery, crash ni error. El recovery es un *contexto de producción* del evento, no su semántica.
+
+**D12 — Idempotencia: `OrderObservedClosed` SÍ entra en el esquema de clave de contenido de ADR-011 D5, a diferencia de `OrderObservedOpen`.** Un hecho terminal es **estable por contenido**: dos observaciones de la misma orden cerrada deben ser idénticas (`filled_quantity`, `filled_value`, `remote_status`, `remote_updated_time_ms` no cambian tras el estado absorbente). Por tanto `UNIQUE (execution_account_id, execution_order_id, event_type)` es **correcto y suficiente** para `ObservedClosed`: un reintento de append devuelve el receipt existente (ADR-011 D5-C). **Refinamiento prospectivo, no reescritura, de ADR-011 D5:** ante colisión de clave con **contenido distinto** (Bybit reportó dos cierres incompatibles para la misma orden — posible sólo por la latencia de F5 entre `realtime` y `history`), el Writer **no** devuelve el receipt existente ni sobrescribe: falla cerrado con error de integridad y escala; la primera observación committeada es la que queda, la discrepancia se registra fuera del ledger. `OrderObservedOpen` sigue **excluida** del esquema (repite legítimamente con `filled_quantity` creciente).
+
+**D13 — Transiciones legales y estabilidad.** Para una orden Phoenix (linear, market/limit): `New → PartiallyFilled → Filled` · `New → Filled` (market, típico) · `New → Cancelled` (sin ejecución) · `PartiallyFilled → Cancelled` (**con** ejecución, F1). `Rejected` es terminal inmediato — normalmente **nunca** pasa por `New` (es la respuesta síncrona de submisión); su aparición en read-side es el caso de D15. `{Filled, Cancelled, Rejected}` es un **conjunto absorbente**: ninguna transición sale de él. Por eso `ObservedClosed` es un hecho estable apto para recovery, y `ObservedOpen` es un snapshot. `Triggered` **no** es cerrado para Phoenix pese a la agrupación del enum oficial (F1): el read-side ya lo trata como abierto desde 3.71 y este ADR no lo altera.
+
+**D14 — Los tres casos de aceptación, reconstruidos.** *(a) MARKET, el caso principal:* `Attempted` durable → `urlopen` → Bybit ejecuta → respuesta perdida → `Unknown(transport_failure)` → restart → recovery consulta por `orderLinkId` → `Filled` → `OrderObservedClosed(remote_status="filled", filled_quantity==quantity, average_price=P, filled_value=V)`. Ledger: `[Attempted, Unknown, ObservedClosed]`. **Historia cerrada; capital contabilizado; sin fills inventados.** Sin este evento, la orden más peligrosa del sistema quedaría como `Unknown` perpetuo. *(b) LIMIT parcial + cancelada:* `Attempted → Accepted (o Unknown) → ejecución parcial → cancelación → recovery → OrderObservedClosed(remote_status="cancelled", filled_quantity=0.4, quantity=1.0, cancel_type="CancelByUser")`. El hecho de ejecución parcial **no se pierde**: vive en `filled_quantity`, no en el estado. *(c) `110072` (OQ4 de ADR-011, no resuelto aquí):* reintento con la misma `ExecutionOrderId` → `110072` → lookup por `orderLinkId` → la **única** orden con ese `linkId` (Bybit rechazó el duplicado) → abierta → `ObservedOpen`; cerrada → `ObservedClosed`. Representable sin cambio alguno.
+
+**D15 — Orden encontrada `Rejected` en read-side: `OrderObservedClosed(remote_status="rejected")`, nunca `OrderRejectedByExchange` retroactivo.** `OrderRejectedByExchange` es REMOTE: la respuesta síncrona a la submisión propia, con `ret_code`/`ret_msg` de esa respuesta. Un `Rejected` descubierto por GET es OBSERVED: Phoenix no presenció la respuesta, y `rejectReason` (verbatim, D8) no es `ret_code`. Emitir el REMOTE retroactivamente mezclaría autoridades (ADR-010 D1) y fabricaría un `ret_code` que Phoenix nunca recibió. La Projection trata ambos como terminal-rechazado; la historia conserva cuál autoridad lo afirmó.
+
+**D16 — Contrato propuesto (no implementado; formato exacto sujeto al hito de implementación).**
+```
+@dataclass(frozen=True)
+class OrderObservedClosed(ObservedFact):
+    """Hecho OBSERVED: Phoenix encontró, mediante una lectura posterior
+    (Open & Closed Orders u Order History), una orden CERRADA que
+    correlaciona con una ExecutionOrderId propia (order_id == orderLinkId).
+
+    Es la observación ordinaria de que una orden terminó -- no un evento
+    de recovery ni de error. Se produce igual tras [Attempted, Accepted],
+    tras [Attempted, Unknown] o tras [Attempted] a secas (ventana de crash).
+
+    Terminal y absorbente: ningún hecho posterior reabre la orden. Por
+    eso, a diferencia de OrderObservedOpen, es estable por contenido y
+    entra en la clave de idempotencia (ADR-011 D5 / ADR-012 D12).
+
+    NO es un fill ledger: filled_quantity / filled_value / average_price
+    son los agregados acumulados que Bybit reporta A NIVEL DE ORDEN
+    (cumExecQty / cumExecValue / avgPrice). No afirma ejecuciones
+    individuales, fees ni atribución de trades.
+
+    remote_updated_time_ms es "Order updated timestamp" de Bybit. NO es
+    tiempo de fill ni de cierre: Bybit no lo garantiza como tal.
+    """
+    execution_order_id: ExecutionOrderId
+    exchange_order_id: str
+    symbol: str
+    side: str                      # "buy" | "sell"
+    order_type: str                # "market" | "limit"
+    quantity: Decimal              # > 0, finita
+    filled_quantity: Decimal       # >= 0, <= quantity
+    filled_value: Decimal          # >= 0; == 0 <=> filled_quantity == 0
+    remote_status: str             # "filled" | "cancelled" | "rejected"
+    reduce_only: bool
+    server_time_ms: int            # >= 0, BybitResponse.time_ms del GET
+    remote_created_time_ms: int    # >= 0, createdTime
+    remote_updated_time_ms: int    # >= 0, updatedTime; >= created
+    price: Decimal | None = None   # limit => > 0; market => None
+    average_price: Decimal | None = None  # None <=> filled_quantity == 0
+    cancel_type: str | None = None        # None si remote_status != "cancelled"
+    reject_reason: str | None = None      # verbatim; None si ausente/EC_NoError
+```
+Invariantes en `__post_init__` (además de los tipos): `remote_status` en el conjunto cerrado; `filled` ⇒ `filled_quantity == quantity`; `rejected` ⇒ `filled_quantity == 0`; `cancelled` ⇒ `filled_quantity < quantity`; `average_price is None` ⇔ `filled_quantity == 0`; `filled_value == 0` ⇔ `filled_quantity == 0`; `cancel_type is None` si `remote_status != "cancelled"`; `remote_updated_time_ms >= remote_created_time_ms`; acoplamiento `order_type`/`price` idéntico a `OrderObservedOpen`; `execution_order_id` sólo `ExecutionOrderId` (nunca `str`, nunca `None`); `exchange_order_id` `str` no vacío. Sin `default` en ningún campo obligatorio.
+
+### NOT IMPLEMENTED
+
+`OrderObservedClosed` (ningún archivo de producción tocado; `execution_ledger_event_contracts.py` byte-idéntico); interpreter de órdenes cerradas; primitiva de lectura de `/v5/order/history`; ampliación de `_VALID_STATUSES` del read-side; recovery worker; Writer; PostgreSQL; integración; tests. `OrderObservedOpen` y sus cuatro estados **no se modifican**.
+
+### IMPACTO EN ADR-011 (prospectivo, sin reescribir historia)
+
+- **D5 (idempotencia):** el esquema de clave de contenido se **extiende** a `OrderObservedClosed` (ADR-012 D12) y gana la regla de colisión-con-contenido-distinto → fallo cerrado. `OrderObservedOpen` sigue excluida.
+- **D10 (recovery), paso 3:** "si cerrada → V1 no tiene evento" queda respondido; y **la fuente de la consulta cambia**: `realtime` es volátil (F4) — recovery debe consultar `/v5/order/history` (F5); `realtime` queda como comprobación rápida opcional, nunca como única fuente.
+- **D13 (Projection):** se añade la regla de hecho terminal absorbente (ADR-012 D9/D13).
+- **D14 (esquema):** sin cambio estructural — `event_type` y las dos `UNIQUE` absorben el nuevo tipo.
+- **OQ2:** resuelta por este ADR (sujeto al STOP de abajo). **OQ3:** su alcance **crece** — no basta añadir `openOnly=1`+`orderLinkId` a `realtime`; hace falta una primitiva nueva sobre un endpoint nuevo (`/v5/order/history`).
+
+### OPEN QUESTIONS
+
+**OQ1 — Latencia de `history` (F5, "may delay"):** ¿cuánto debe esperar recovery tras un restart antes de dar por no-encontrada una orden? Sin dato oficial de cota. Parámetro del hito de implementación.
+**OQ2 — Enumeración de `cancel_type`/`reject_reason`:** se llevan verbatim (D8). Si un consumidor futuro necesita actuar sobre ellos, se congelaría entonces un subconjunto, no ahora.
+**OQ3 — Contradicción `Attempted` ↔ `ObservedClosed`** (`symbol`/`side`/`quantity` distintos): responsabilidad de la Projection (D6); su representación (¿divergencia? ¿evento?) no se diseña aquí.
+**OQ4 — `/v5/execution/list`:** no necesario para este evento (D4). Sólo relevante si algún día se diseña un Fill Ledger.
+
+### STOP — decisión requerida de la directora del proyecto
+
+**Dependencia del endpoint histórico y horizonte de recovery.**
+
+**HECHO:** `realtime` no es durable — su caché de cerradas se vacía cuando Bybit reinicia (F4). La única fuente durable es `/v5/order/history`, un endpoint que Phoenix **no implementa**, con retención **asimétrica** (F5): 24 h para cancelaciones sin ejecución y rechazos; 7 días para el resto; indefinida (documentada como "beyond 7 days") sólo para órdenes con fills.
+
+**AMBIGÜEDAD:** El diseño del evento (D1-D16) es independiente de esto. Pero **recovery V1 no puede prometerse sin fijar dos cosas que no son derivables del repo**: (1) aceptar una primitiva de lectura sobre un endpoint nuevo — ampliación de alcance del read-side aceptado; (2) aceptar un **horizonte de recovery**: si Phoenix permanece caído más de 24 h, una orden cancelada sin ejecución o rechazada deja de ser resoluble y sólo puede **escalarse** (económicamente inerte, sin capital movido); si más de 7 días, cualquier orden sin fills. Eso es una aceptación de riesgo operacional, no una decisión técnica.
+
+**OPCIÓN A — Recovery V1 sobre `/v5/order/history` como fuente única durable, con `realtime` como comprobación rápida opcional; horizonte aceptado explícitamente: recovery corre en el arranque; toda orden no encontrada se escala, nunca se reintenta.**
+Ventajas: única opción coherente con F4/F5; el caso peligroso (hubo ejecución) es el de mayor retención — la asimetría de Bybit juega a favor; escalar una orden inerte no encontrada es seguro. Costos: primitiva nueva sobre endpoint nuevo (hito propio); aceptar que >24 h de caída degrada recovery a escalación para órdenes inertes.
+**OPCIÓN B — Recovery V1 sólo sobre `realtime` (`openOnly=1`), sin `history`.**
+Ventajas: menor alcance (OQ3 original). Riesgos: **incorrecto por F4** — un reinicio de Bybit deja recovery ciego; sería prometer una garantía que la fuente no ofrece.
+**OPCIÓN C — Diferir recovery: congelar sólo el evento, sin diseñar aún de dónde se obtiene.**
+Ventajas: cero compromiso de endpoint. Riesgos: el evento sin fuente es inerte; deja el caso MARKET (D14a) sin cierre real — el hueco que motivó este hito.
+
+**RECOMENDACIÓN:** **Opción A.** Es la única que la evidencia oficial sostiene. Pero la aceptación del horizonte (24 h / 7 días, con escalación como salida) y la ampliación del read-side aceptado son decisiones de alcance y riesgo — se recomiendan, no se toman.
+
+**Archivos de producción modificados:** ninguno. **Tests:** ninguno. **Suite:** 6189 passing, sin cambio.
+**Sin conexión real con Bybit (sólo documentación oficial); sin Railway; sin PostgreSQL; sin Writer; sin recovery; sin Projection.**
+**Hito 3.85 — STOP: DECISIÓN REQUERIDA** sobre dependencia del endpoint histórico y horizonte de recovery; la semántica de `OrderObservedClosed` queda diseñada y derivada de evidencia.
