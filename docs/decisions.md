@@ -1141,6 +1141,23 @@ Ventajas: cero compromiso de endpoint. Riesgos: el evento sin fuente es inerte; 
 
 **RECOMENDACIÓN:** **Opción A.** Es la única que la evidencia oficial sostiene. Pero la aceptación del horizonte (24 h / 7 días, con escalación como salida) y la ampliación del read-side aceptado son decisiones de alcance y riesgo — se recomiendan, no se toman.
 
+**Resolución del STOP (2026-09-14):** la directora del proyecto eligió la **Opción A**, con diez puntos que se registran tal cual como restricciones permanentes del diseño de recovery:
+
+1. **Fuente durable y autoritativa** para el recovery de órdenes por `ExecutionOrderId`/`orderLinkId`: `/v5/order/history`.
+2. **`/v5/order/realtime` con `openOnly=1` NO será la única fuente de recovery.** Podrá usarse más adelante como fast-path/optimización, pero **la corrección del recovery no debe depender de su caché** (F4).
+3. **Razón estructural:** una orden — especialmente MARKET — puede haber sido ejecutada/cerrada mientras Phoenix perdió la respuesta, y después desaparecer de la ventana/caché de `realtime`.
+4. Si `order/history` **encuentra** la orden: Phoenix podrá registrar el hecho OBSERVED correspondiente según la semántica de este ADR (`OrderObservedOpen` si abierta, `OrderObservedClosed` si cerrada — D14).
+5. Si `order/history` **NO encuentra** la orden: **PROHIBIDO inferir automáticamente** que Bybit nunca la recibió, que fue rechazada, o que es seguro reenviarla.
+6. Una orden `Attempted`/`Unknown` que no pueda resolverse tras el horizonte operativo **debe escalarse / fail-closed**. **Nunca auto-reenviar únicamente por ausencia en `history`.**
+7. **El horizonte de `>24 h` se registra como policy operativa conservadora y configurable, NO como garantía ontológica del exchange.** Aclaración de este ADR sobre la evidencia citada: los valores 24 h / 7 días / "beyond 7 days only with fills" de F5 **sí** proceden de la documentación oficial de `/v5/order/history` — pero describen la **retención del endpoint** (lo que Bybit devuelve, sujeto a cambio unilateral), no una garantía sobre la existencia o el destino de la orden. Phoenix no deriva de ellos ninguna afirmación ontológica; los usa únicamente como **cota superior** que la policy operativa no debe exceder.
+8. **Se mantienen separadas** dos cosas distintas: la *fuente durable de evidencia remota* (punto 1) y la *policy de cuánto tiempo intenta Phoenix resolver una incertidumbre* (punto 7). La primera es un hecho sobre Bybit; la segunda es una decisión de Phoenix, configurable, y nunca se confunde con la primera.
+9. **No se implementa todavía el endpoint.** Esta resolución se registra sin reescribir la pregunta histórica ni las opciones descartadas.
+10. Tras registrar y publicar esta decisión, **detenerse**. El siguiente hito será implementar y auditar la primitiva read-side de lookup por `orderLinkId` sobre `/v5/order/history`.
+
+**Consecuencias que esta resolución fija sobre ADR-011 D10 (prospectivas, sin reescritura):** el paso 2 de D10 ("consultar `/v5/order/realtime` con `openOnly=1`") queda **sustituido** por "consultar `/v5/order/history` por `orderLinkId`"; `realtime` pasa a ser, a lo sumo, un fast-path previo cuyo resultado negativo **nunca** es concluyente. El paso 3 ("si no se encuentra en la ventana de 500 → escalar") se generaliza: no encontrada en `history` dentro del horizonte operativo → escalar, sin ninguna inferencia (punto 5). Y OQ3 de ADR-011 queda formalmente redefinida como *primitiva de lectura por `orderLinkId` sobre `/v5/order/history`*, no sobre `realtime`.
+
+**El Hito 3.85 no se declara aceptado.** El STOP está resuelto y el diseño de `OrderObservedClosed` queda congelado a nivel de ADR; la aceptación formal, si el procedimiento la exige, corresponde a una reauditoría posterior, no a esta resolución.
+
 **Archivos de producción modificados:** ninguno. **Tests:** ninguno. **Suite:** 6189 passing, sin cambio.
 **Sin conexión real con Bybit (sólo documentación oficial); sin Railway; sin PostgreSQL; sin Writer; sin recovery; sin Projection.**
-**Hito 3.85 — STOP: DECISIÓN REQUERIDA** sobre dependencia del endpoint histórico y horizonte de recovery; la semántica de `OrderObservedClosed` queda diseñada y derivada de evidencia.
+**Hito 3.85 — STOP: DECISIÓN REQUERIDA** sobre dependencia del endpoint histórico y horizonte de recovery; la semántica de `OrderObservedClosed` queda diseñada y derivada de evidencia. **STOP resuelto por la directora el 2026-09-14 (Opción A, `/v5/order/history` como fuente durable; horizonte como policy operativa, no garantía del exchange) — ver "Resolución del STOP" arriba; no implementado; hito no declarado aceptado.**
