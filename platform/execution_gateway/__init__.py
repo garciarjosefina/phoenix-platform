@@ -205,6 +205,29 @@ from execution_gateway.execution_ledger_event_contracts import (
     OrderObservedOpen,
     ExecutionLedgerEvent,
 )
+from execution_gateway.order_history_lookup_contracts import (
+    BybitOrderHistoryLookupResult,
+    BybitOrderHistoryOrderFound,
+    BybitOrderHistoryOrderNotFound,
+)
+from execution_gateway.order_history_lookup_reader import OrderHistoryLookupReader
+from execution_gateway.bybit_endpoints import BYBIT_ORDER_HISTORY_ENDPOINT
+from execution_gateway.bybit_order_history_response_interpreter import (
+    BybitOrderHistoryResponseInterpreter,
+)
+from execution_gateway.bybit_order_history_lookup import BybitOrderHistoryLookup
+from execution_gateway.bybit_demo_order_history_lookup_factory import (
+    create_bybit_demo_order_history_lookup,
+)
+from execution_gateway.configured_bybit_demo_order_history_lookup_factory import (
+    create_configured_bybit_demo_order_history_lookup,
+)
+from execution_gateway.bybit_demo_order_history_lookup_env_bootstrap import (
+    bootstrap_bybit_demo_order_history_lookup_from_env,
+)
+from execution_gateway.bybit_demo_order_history_query import (
+    query_bybit_demo_order_history_by_execution_order_id,
+)
 
 __all__ = [
     "__version__",
@@ -367,4 +390,15 @@ __all__ = [
     "OrderRejectedByExchange",
     "OrderObservedOpen",
     "ExecutionLedgerEvent",
+    "BybitOrderHistoryLookupResult",
+    "BybitOrderHistoryOrderFound",
+    "BybitOrderHistoryOrderNotFound",
+    "OrderHistoryLookupReader",
+    "BYBIT_ORDER_HISTORY_ENDPOINT",
+    "BybitOrderHistoryResponseInterpreter",
+    "BybitOrderHistoryLookup",
+    "create_bybit_demo_order_history_lookup",
+    "create_configured_bybit_demo_order_history_lookup",
+    "bootstrap_bybit_demo_order_history_lookup_from_env",
+    "query_bybit_demo_order_history_by_execution_order_id",
 ]

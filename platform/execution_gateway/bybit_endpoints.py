@@ -25,10 +25,21 @@ BYBIT_INSTRUMENTS_INFO_ENDPOINT = BybitEndpoint(
     path="/v5/market/instruments-info",
 )
 
+# Hito 3.86: fuente durable de recovery fijada por la Resolución del STOP de
+# ADR-012 -- distinta de /v5/order/realtime (BYBIT_OPEN_ORDERS_ENDPOINT), cuya
+# caché de órdenes cerradas es volátil (se vacía en cada reinicio de Bybit,
+# confirmado contra documentación oficial). Endpoint privado/autenticado
+# (verificado contra la documentación V5 vigente de /v5/order/history).
+BYBIT_ORDER_HISTORY_ENDPOINT = BybitEndpoint(
+    method="GET",
+    path="/v5/order/history",
+)
+
 __all__ = [
     "BYBIT_CREATE_ORDER_ENDPOINT",
     "BYBIT_POSITIONS_ENDPOINT",
     "BYBIT_OPEN_ORDERS_ENDPOINT",
     "BYBIT_WALLET_BALANCE_ENDPOINT",
     "BYBIT_INSTRUMENTS_INFO_ENDPOINT",
+    "BYBIT_ORDER_HISTORY_ENDPOINT",
 ]
