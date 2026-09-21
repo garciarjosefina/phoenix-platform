@@ -86,6 +86,37 @@ class TestFoundFieldTypes:
         with pytest.raises(ValueError, match="side"):
             _found(side="long")
 
+    @pytest.mark.parametrize("field", [
+        "quantity", "filled_quantity", "filled_value", "price", "average_price",
+    ])
+    @pytest.mark.parametrize("bad", [
+        Decimal("NaN"), Decimal("Infinity"), Decimal("-Infinity"), Decimal("sNaN"),
+    ], ids=["NaN", "Infinity", "-Infinity", "sNaN"])
+    def test_non_finite_decimal_rejected_on_every_economic_field(self, field, bad):
+        # MENOR-4 (auditoría adversarial post-3.86): guardia compartida
+        # `is_finite` -- confirmada aquí directamente contra el contrato
+        # (no sólo contra el interpreter) en los cinco campos económicos.
+        overrides = {field: bad}
+        if field == "price":
+            overrides["order_type"] = "limit"
+        try:
+            _found(**overrides)
+            assert False, f"{field}={bad} was accepted"
+        except (ValueError, TypeError):
+            pass
+
+    def test_removing_finite_guard_is_detected_via_infinity(self):
+        # Prueba causal específica de la guardia `is_finite`: Infinity pasa
+        # las comparaciones ordinarias (`< 0` es False, `> 0` es True), así
+        # que sólo `is_finite` la detiene. Si esa guardia se eliminara,
+        # filled_value=Infinity construiría sin error.
+        with pytest.raises(ValueError, match="filled_value"):
+            _found(filled_value=Decimal("Infinity"))
+
+    def test_removing_finite_guard_is_detected_via_negative_infinity(self):
+        with pytest.raises(ValueError, match="quantity"):
+            _found(quantity=Decimal("-Infinity"))
+
     def test_order_type_must_be_market_or_limit(self):
         with pytest.raises(ValueError, match="order_type"):
             _found(order_type="stop")

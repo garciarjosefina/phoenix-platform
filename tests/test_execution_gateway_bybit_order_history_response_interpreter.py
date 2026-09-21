@@ -167,6 +167,18 @@ class TestCorrelation:
         with pytest.raises(BybitResponseProcessingError):
             _interpret(items=[item])
 
+    def test_exchange_order_id_matching_requested_identity_never_substitutes(self):
+        # MENOR-3 (auditoría adversarial post-3.86): prueba causal directa,
+        # no sólo estructural. Construye deliberadamente un `orderId`
+        # (exchange, campo adversarial) IGUAL al ExecutionOrderId solicitado,
+        # con `orderLinkId` (el campo que SÍ debe decidir la correlación)
+        # apuntando a una identidad distinta. Si el interpreter alguna vez
+        # comparara contra `orderId` en lugar de -- o además de --
+        # `orderLinkId`, este caso construiría FOUND incorrectamente.
+        item = _item(orderId=_OID.value, orderLinkId="ord_" + "b" * 32)
+        with pytest.raises(BybitResponseProcessingError):
+            _interpret(execution_order_id=_OID, items=[item])
+
 
 class TestPagination:
     def test_nonempty_cursor_fails_closed(self):
@@ -276,6 +288,26 @@ class TestClosedStatusTaxonomy:
         with pytest.raises(BybitResponseProcessingError):
             _interpret(items=[_item(orderStatus=status)])
 
+    @pytest.mark.parametrize("status", [
+        "New", "PartiallyFilled", "Untriggered", "Triggered",
+        "Deactivated", "PartiallyFilledCanceled",
+    ])
+    def test_rejects_status_outside_admissible_closed_set_zero_fill_geometry(self, status):
+        # MENOR-2 (auditoría adversarial post-3.86): el test de arriba usa
+        # el fixture full-fill por defecto, que un mapeo espurio hacia
+        # "cancelled" (p.ej. Deactivated->cancelled) seguiría rechazando por
+        # la invariante cruzada `cancelled requiere filled_quantity <
+        # quantity` -- pero eso oculta si el whitelist de estados en sí
+        # sigue funcionando: con esa MISMA invariante satisfecha (geometría
+        # zero-fill, la forma real de una orden Deactivated/PartiallyFilled-
+        # Canceled), un mapeo espurio construiría sin error. Este test usa
+        # deliberadamente la geometría que SÍ sería válida para "cancelled"
+        # o "rejected", para que sólo el whitelist de _REMOTE_STATUS_FROM_BYBIT
+        # pueda estar deteniendo el resultado.
+        item = _item(orderStatus=status, cumExecQty="0", cumExecValue="0", avgPrice="")
+        with pytest.raises(BybitResponseProcessingError):
+            _interpret(items=[item])
+
 
 class TestPartialFillCancelled:
     """Caso obligatorio del Hito 3.86 (§14): LIMIT qty=1, cumExecQty=0.4,
@@ -365,9 +397,154 @@ class TestSentinels:
         assert result.cancel_type is None
 
     def test_unexpected_cancel_type_on_non_cancelled_order_fails_closed(self):
-        # MENOR-1 (ADR-012): sin sentinel documentado -- cualquier valor no
-        # vacío en una orden no cancelada debe fallar cerrado vía la
-        # invariante del contrato, nunca descartarse en silencio.
+        # Deuda explícita registrada en ADR-012 (corrección post-auditoría
+        # 3.86, no resuelta aquí): una orden Filled con un motivo de
+        # cancelación REAL bajo una carrera fill/cancel sigue fallando
+        # cerrado -- distinto de "UNKNOWN" (sentinel genérico), que sí se
+        # normaliza a None (ver TestOfficialResponseExamples).
         item = _item(orderStatus="Filled", cancelType="CancelByUser")
         with pytest.raises(BybitResponseProcessingError):
             _interpret(items=[item])
+
+    def test_avg_price_zero_is_none_without_fill(self):
+        # Corrección post-auditoría 3.86: "0" es sentinel de ausencia para
+        # avgPrice, igual que "" -- ver TestOfficialResponseExamples para la
+        # evidencia oficial exacta que sustenta esto.
+        item = _item(orderStatus="Rejected", cumExecQty="0", cumExecValue="0", avgPrice="0")
+        result = _interpret(items=[item])
+        assert result.average_price is None
+
+    def test_avg_price_zero_with_real_execution_fails_closed(self):
+        # La normalización del sentinel NUNCA relaja la invariante cruzada:
+        # avgPrice=="0" simultáneo con ejecución real es una respuesta
+        # inconsistente y sigue fallando cerrado (average_price no puede ser
+        # None cuando filled_quantity > 0).
+        item = _item(cumExecQty="0.5", cumExecValue="30000", avgPrice="0")
+        with pytest.raises(BybitResponseProcessingError):
+            _interpret(items=[item])
+
+    def test_cancel_type_unknown_is_none(self):
+        # Corrección post-auditoría 3.86: "UNKNOWN" es el sentinel genérico
+        # de Bybit para "sin clasificación aplicable" -- confirmado por dos
+        # ejemplos oficiales independientes (ver
+        # TestOfficialResponseExamples). NO se generaliza a cualquier string
+        # desconocido: sólo el token literal "UNKNOWN".
+        item = _item(orderStatus="Filled", cancelType="UNKNOWN")
+        result = _interpret(items=[item])
+        assert result.cancel_type is None
+
+    def test_cancel_type_unknown_on_cancelled_order_is_none(self):
+        # El propio ejemplo oficial de /v5/order/history es una orden
+        # EFECTIVAMENTE cancelada con cancelType="UNKNOWN" -- ni siquiera una
+        # cancelación real garantiza un motivo clasificado.
+        item = _item(
+            orderType="Limit", price="60000", qty="1", cumExecQty="0", cumExecValue="0", avgPrice="0",
+            orderStatus="Cancelled", cancelType="UNKNOWN",
+        )
+        result = _interpret(items=[item])
+        assert result.cancel_type is None
+        assert result.remote_status == "cancelled"
+
+    def test_cancel_type_specific_reason_still_preserved_verbatim_when_cancelled(self):
+        # La normalización NO oculta un motivo real cuando sí lo hay -- sólo
+        # colapsa el placeholder "UNKNOWN".
+        item = _item(
+            orderType="Limit", price="60000", qty="1", cumExecQty="0", cumExecValue="0", avgPrice="0",
+            orderStatus="Cancelled", cancelType="CancelByUser",
+        )
+        result = _interpret(items=[item])
+        assert result.cancel_type == "CancelByUser"
+
+
+class TestOfficialResponseExamples:
+    """Fixtures derivados LITERALMENTE de los ejemplos de respuesta
+    publicados en la documentación oficial de Bybit V5 (no de la prosa de
+    las tablas de campos), agregados tras el hallazgo IMPORTANTE-1 de la
+    auditoría adversarial del Hito 3.86: los tests previos sólo usaban
+    payloads sintéticos con avgPrice="" y sin cancelType, lo que ocultaba
+    que el interpreter pre-corrección fallaba cerrado ante las respuestas
+    reales que Bybit efectivamente documenta.
+
+    Sólo `orderLinkId`/`orderId` se sustituyen (son específicos de cuenta,
+    no relevantes para el sentinel); el resto de los valores económicos y
+    de estado se preserva tal cual figura en la documentación oficial."""
+
+    def test_official_order_history_example_cancelled_zero_fill(self):
+        # GET /v5/order/history (docs/v5/order/order-list) -- único ejemplo
+        # de respuesta publicado: Limit BTCUSDT, price 26864.40, qty 0.003,
+        # orderStatus=Cancelled (rechazo PostOnly), cancelType="UNKNOWN",
+        # rejectReason="EC_PostOnlyWillTakeLiquidity", avgPrice="0",
+        # cumExecQty="0.000", cumExecValue="0", reduceOnly=false,
+        # createdTime="1684476068369", updatedTime="1684476068372".
+        item = _item(
+            orderType="Limit", price="26864.40", qty="0.003", cumExecQty="0.000", cumExecValue="0",
+            avgPrice="0", orderStatus="Cancelled", cancelType="UNKNOWN",
+            rejectReason="EC_PostOnlyWillTakeLiquidity", reduceOnly=False,
+            createdTime="1684476068369", updatedTime="1684476068372",
+        )
+        result = _interpret(items=[item])
+        assert result.remote_status == "cancelled"
+        assert result.filled_quantity == Decimal("0")
+        assert result.filled_value == Decimal("0")
+        assert result.average_price is None
+        assert result.cancel_type is None
+        assert result.reject_reason == "EC_PostOnlyWillTakeLiquidity"
+        assert result.price == Decimal("26864.40")
+        assert result.remote_created_time_ms == 1684476068369
+        assert result.remote_updated_time_ms == 1684476068372
+
+    def test_official_websocket_order_example_filled(self):
+        # WebSocket privado "order" (docs/v5/websocket/private/order) --
+        # ejemplo de push: Market, qty=1, orderStatus=Filled,
+        # cancelType="UNKNOWN", cumExecQty="1", cumExecValue="75",
+        # avgPrice="75", rejectReason="EC_NoError",
+        # createdTime="1672364262444", updatedTime="1672364262457". Éste es
+        # el acceptance case principal del Hito 3.86 (MARKET Filled) con los
+        # valores EXACTOS que Bybit documenta -- debía fallar antes de la
+        # corrección y debe producir FOUND ahora.
+        item = _item(
+            orderType="Market", price="", qty="1", cumExecQty="1", cumExecValue="75", avgPrice="75",
+            orderStatus="Filled", cancelType="UNKNOWN", rejectReason="EC_NoError",
+            createdTime="1672364262444", updatedTime="1672364262457",
+        )
+        result = _interpret(items=[item])
+        assert isinstance(result, BybitOrderHistoryOrderFound)
+        assert result.remote_status == "filled"
+        assert result.filled_quantity == Decimal("1")
+        assert result.filled_value == Decimal("75")
+        assert result.average_price == Decimal("75")
+        assert result.cancel_type is None
+        assert result.reject_reason is None
+        assert result.price is None
+
+    def test_official_example_cancelled_partial_fill_realistic(self):
+        # No existe un ejemplo oficial publicado con ejecución parcial +
+        # Cancelled simultáneamente, pero es la combinación obligatoria del
+        # Hito 3.86 (§14/§6-C de la corrección) -- construido combinando los
+        # sentinels ya confirmados oficialmente (cancelType="UNKNOWN" no
+        # implica ausencia de ejecución) con una magnitud de fill legítima.
+        item = _item(
+            orderType="Limit", price="60000", qty="1", cumExecQty="0.4", cumExecValue="24000",
+            avgPrice="60000", orderStatus="Cancelled", cancelType="UNKNOWN", rejectReason="",
+        )
+        result = _interpret(items=[item])
+        assert result.remote_status == "cancelled"
+        assert result.filled_quantity == Decimal("0.4")
+        assert result.filled_value == Decimal("24000")
+        assert result.average_price == Decimal("60000")
+        assert result.cancel_type is None
+
+    def test_official_example_rejected_zero_fill(self):
+        # Combinación D de la corrección (§6): Rejected, avgPrice="0",
+        # cancelType="UNKNOWN", filled_quantity=0 -- ambos sentinels
+        # oficiales aplicados al tercer estado admisible.
+        item = _item(
+            orderType="Limit", price="60000", qty="1", cumExecQty="0", cumExecValue="0", avgPrice="0",
+            orderStatus="Rejected", cancelType="UNKNOWN", rejectReason="EC_NoImmediateQtyToFill",
+        )
+        result = _interpret(items=[item])
+        assert result.remote_status == "rejected"
+        assert result.filled_quantity == Decimal("0")
+        assert result.average_price is None
+        assert result.cancel_type is None
+        assert result.reject_reason == "EC_NoImmediateQtyToFill"

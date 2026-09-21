@@ -62,19 +62,24 @@ def _to_optional_price_decimal(value: object) -> Decimal | None:
 
 
 def _to_optional_avg_price_decimal(value: object) -> Decimal | None:
-    # Deliberadamente MÁS CONSERVADOR que _to_optional_price_decimal: la
-    # documentación oficial de avgPrice sólo confirma "" como sentinel de
-    # ausencia ("returns \"\" for those orders without avg price") -- a
-    # diferencia de price, no hay evidencia de que "0" sea también una
-    # respuesta legítima para avgPrice. Un avgPrice=="0" con ejecución real
-    # (filled_quantity > 0) no se reinterpreta silenciosamente como None:
-    # pasa como Decimal("0") y la invariante average_price > 0 del contrato
-    # lo rechaza -- fail-closed ante un dato inconsistente en vez de
-    # inventar un segundo sentinel sin evidencia (MENOR pendiente de
-    # confirmación empírica en Bybit Demo).
+    # Corrección post-auditoría del Hito 3.86: "0" SÍ es un sentinel legítimo
+    # de ausencia para avgPrice, no sólo "". Evidencia oficial directa (no
+    # inferida): el ÚNICO ejemplo de respuesta publicado para
+    # GET /v5/order/history (docs/v5/order/order-list) es una orden Cancelled
+    # sin ejecución con "avgPrice": "0" (cumExecQty/cumExecValue también
+    # "0"). Mismo patrón que price en Open Orders Read (IMPORTANT-1, Hito
+    # 3.71): "0" y "" son ambos sentinels documentados de "sin precio/sin
+    # ejecución" en esta misma familia de endpoints v5/order/*, nunca un
+    # precio económico real de cero. Un avgPrice numérico != 0 sigue
+    # exigiendo filled_quantity > 0 vía la invariante cruzada del contrato
+    # (average_price is None <=> filled_quantity == 0) -- esta función sólo
+    # normaliza el sentinel, nunca relaja esa invariante.
     if value is None or value == "":
         return None
-    return _to_finite_decimal(value)
+    parsed = _to_finite_decimal(value)
+    if parsed == 0:
+        return None
+    return parsed
 
 
 def _to_optional_non_empty_str(value: object) -> str | None:
@@ -83,6 +88,31 @@ def _to_optional_non_empty_str(value: object) -> str | None:
     if not isinstance(value, str):
         raise BybitResponseProcessingError(message=_PROCESSING_ERROR_MESSAGE)
     return value
+
+
+def _to_optional_cancel_type(value: object) -> str | None:
+    # Corrección post-auditoría del Hito 3.86: "UNKNOWN" es el sentinel
+    # genérico de Bybit para "sin clasificación aplicable" en cancelType --
+    # NO un valor de la enumeración documentada (docs/v5/enum no lista
+    # "UNKNOWN" entre los ~20 valores reales de cancelType) y sin embargo
+    # aparece en DOS ejemplos oficiales de respuesta independientes: (a)
+    # GET /v5/order/history (order-list), una orden con orderStatus=Cancelled
+    # (rechazo PostOnly) que muestra "cancelType": "UNKNOWN" -- es decir, ni
+    # siquiera una orden efectivamente cancelada garantiza un motivo real
+    # aquí; (b) el stream privado de WebSocket order, una orden con
+    # orderStatus=Filled que también muestra "cancelType": "UNKNOWN". La
+    # evidencia acota la normalización a EXACTAMENTE ese token literal --
+    # no se generaliza a "cualquier string desconocido"; cualquier otro
+    # valor no vacío (p.ej. "CancelByUser") se preserva verbatim y sigue
+    # sujeto a la invariante del contrato (cancel_type debe ser None si
+    # remote_status != "cancelled"), que sigue fallando cerrado ante el caso
+    # prospectivo no resuelto aquí: una orden Filled con un motivo de
+    # cancelación REAL y específico bajo una carrera fill/cancel (deuda
+    # explícita, ver docs/decisions.md ADR-012).
+    text = _to_optional_non_empty_str(value)
+    if text == "UNKNOWN":
+        return None
+    return text
 
 
 def _to_optional_reject_reason(value: object) -> str | None:
@@ -160,14 +190,7 @@ def _interpret_history_item(
     filled_value = _to_finite_decimal(item["cumExecValue"])
     price = _to_optional_price_decimal(item.get("price"))
     average_price = _to_optional_avg_price_decimal(item.get("avgPrice"))
-    # cancelType: sin sentinel documentado para órdenes no canceladas
-    # (MENOR-1, ADR-012) -- "" o ausente se tratan como None, igual que el
-    # resto de campos opcionales de string de este bounded context; CUALQUIER
-    # otro valor se preserva verbatim y queda sujeto a la invariante del
-    # contrato (cancel_type debe ser None si remote_status != "cancelled"),
-    # que falla cerrado ante un valor inesperado en vez de descartarlo en
-    # silencio. Requiere validación empírica contra Bybit Demo.
-    cancel_type = _to_optional_non_empty_str(item.get("cancelType"))
+    cancel_type = _to_optional_cancel_type(item.get("cancelType"))
     reject_reason = _to_optional_reject_reason(item.get("rejectReason"))
 
     remote_created_time_ms = _to_timestamp_ms(item["createdTime"], field="createdTime")

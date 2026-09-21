@@ -151,6 +151,24 @@ class TestQuery:
         _lookup(private_get_api=api).lookup_by_execution_order_id(execution_order_id=_OID)
         assert f"orderLinkId={_OID.value}" in api.calls[0]["query_string"]
 
+    def test_query_string_is_exactly_category_and_order_link_id(self):
+        # MENOR-1 (auditoría adversarial post-3.86): la aserción por
+        # substring de arriba no detectaría un sufijo/prefijo espurio en el
+        # orderLinkId enviado (p.ej. "ord_...ax" en vez de "ord_...a"). Se
+        # verifica la query string COMPLETA por igualdad exacta.
+        api = _SpyPrivateGetApi()
+        _lookup(private_get_api=api).lookup_by_execution_order_id(execution_order_id=_OID)
+        assert api.calls[0]["query_string"] == f"category=linear&orderLinkId={_OID.value}"
+
+    def test_query_string_rejects_suffixed_order_link_id_regression(self):
+        # Prueba causal directa de MENOR-1: si la query enviara un id con un
+        # carácter de más, la igualdad exacta debe fallar (a diferencia del
+        # `in` original, que la habría dejado pasar).
+        api = _SpyPrivateGetApi()
+        _lookup(private_get_api=api).lookup_by_execution_order_id(execution_order_id=_OID)
+        suffixed = f"category=linear&orderLinkId={_OID.value}x"
+        assert api.calls[0]["query_string"] != suffixed
+
     def test_query_string_never_includes_symbol_filter(self):
         api = _SpyPrivateGetApi()
         _lookup(private_get_api=api).lookup_by_execution_order_id(execution_order_id=_OID)
