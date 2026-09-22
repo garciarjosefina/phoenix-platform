@@ -117,6 +117,18 @@ class TestOpenBranch_NewLimit:
         assert result.remote_updated_time_ms == 400
         assert result.server_time_ms != result.remote_created_time_ms
 
+    def test_reduce_only_true_is_preserved(self):
+        # Auditoría 3.88, hallazgo D2: el único assert previo sobre
+        # reduce_only usaba el valor por defecto del fixture (False).
+        # Este campo será comparado por el futuro comparador económico de
+        # ADR-013 (F8) -- debe demostrarse que True atraviesa intacto.
+        result = _interpret(items=[_item(reduceOnly=True)])
+        assert result.reduce_only is True
+
+    def test_reduce_only_false_is_preserved(self):
+        result = _interpret(items=[_item(reduceOnly=False)])
+        assert result.reduce_only is False
+
 
 class TestOpenBranch_PartiallyFilled:
     def test_partially_filled_returns_found_open(self):
@@ -213,6 +225,20 @@ class TestUnsupportedStatus:
         with pytest.raises(BybitResponseProcessingError):
             _interpret(items=[_item(orderStatus=status)])
 
+    @pytest.mark.parametrize("status", [
+        "new", "NEW", "New ", "partiallyfilled", "PARTIALLYFILLED",
+        "filled", "FILLED", "cancelled", "CANCELLED", "rejected", "REJECTED",
+    ])
+    def test_rejects_case_or_spacing_variants_of_valid_tokens(self, status):
+        # Auditoría 3.88, hallazgo D4: el despacho es por pertenencia
+        # exacta a los dicts _OPEN_STATUS_FROM_BYBIT/_CLOSED_STATUS_FROM_
+        # BYBIT -- nunca .lower()/.upper()/.strip(). Bybit documenta los
+        # tokens exactos ("New", "Filled", ...); cualquier variante de
+        # caja o espaciado no es un token real de la API y debe fallar
+        # cerrado como cualquier otro valor no reconocido.
+        with pytest.raises(BybitResponseProcessingError):
+            _interpret(items=[_item(orderStatus=status)])
+
 
 class TestCardinality:
     def test_zero_results_is_not_found(self):
@@ -257,6 +283,18 @@ class TestCorrelation:
         with pytest.raises(BybitResponseProcessingError):
             _interpret(execution_order_id=_OID, items=[item])
 
+    def test_order_id_matches_requested_identity_but_order_link_id_empty_fails_closed(self):
+        # Auditoría 3.88, hallazgo D1: caso discriminante contra un
+        # fallback silencioso `orderLinkId or orderId`. Aquí el orderId
+        # (identidad del exchange) coincide byte a byte con la identidad
+        # Phoenix solicitada -- exactamente el escenario en el que un
+        # fallback la aceptaría "por accidente" -- pero orderLinkId llega
+        # vacío. orderId NUNCA sustituye a orderLinkId: debe fallar
+        # cerrado igual que cualquier orderLinkId vacío.
+        item = _item(orderId=_OID.value, orderLinkId="")
+        with pytest.raises(BybitResponseProcessingError):
+            _interpret(items=[item])
+
 
 class TestPagination:
     def test_nonempty_cursor_fails_closed(self):
@@ -284,6 +322,20 @@ class TestMalformedResponse:
     def test_list_not_a_list_fails_closed(self):
         with pytest.raises(BybitResponseProcessingError):
             _interpret(result_override={"category": "linear", "list": "not-a-list"})
+
+    def test_list_is_a_mapping_fails_closed_never_not_found(self):
+        # Auditoría 3.88, hallazgo D5: un shape malformado donde `list` es
+        # un dict vacío (`{}`) tiene `len() == 0` -- si la verificación de
+        # tipo se elimina, cae en la misma rama que una lista vacía
+        # LEGÍTIMA y se leería como BybitRealtimeOrderNotFound, la lectura
+        # más peligrosa posible (una respuesta malformada haciéndose
+        # pasar por "no encontrada"). Debe fallar cerrado, nunca NOT_FOUND.
+        with pytest.raises(BybitResponseProcessingError):
+            _interpret(result_override={"category": "linear", "list": {}})
+
+    def test_list_is_an_int_fails_closed_never_not_found(self):
+        with pytest.raises(BybitResponseProcessingError):
+            _interpret(result_override={"category": "linear", "list": 0})
 
     def test_item_not_a_mapping_fails_closed(self):
         with pytest.raises(BybitResponseProcessingError):

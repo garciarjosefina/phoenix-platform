@@ -110,6 +110,24 @@ class TestCrossFieldInvariants:
         with pytest.raises(ValueError, match="filled_quantity"):
             _open(remote_status="new", filled_quantity=Decimal("0.1"), average_price=Decimal("1"))
 
+    def test_new_requires_zero_fill_isolated_from_other_invariants(self):
+        # Auditoría 3.88, hallazgo D3: `test_new_requires_zero_fill` de
+        # arriba dispara la invariante de `filled_value` (fill_value=0 por
+        # defecto mientras filled_quantity=0.1), no la de "new" -- no
+        # prueba causalmente lo que dice probar. Aquí el fill es
+        # económicamente coherente en sí mismo (average_price y
+        # filled_value acoplados correctamente a filled_quantity > 0), de
+        # modo que TODAS las demás invariantes pasan y la ÚNICA que puede
+        # dispararse es "remote_status == 'new' requires filled_quantity
+        # == 0". Si se elimina esa invariante específica, este objeto se
+        # construiría sin error.
+        with pytest.raises(ValueError, match="remote_status == 'new' requires filled_quantity == 0"):
+            _open(
+                remote_status="new", quantity=Decimal("1"),
+                filled_quantity=Decimal("0.1"), filled_value=Decimal("6000"),
+                average_price=Decimal("60000"),
+            )
+
     def test_partially_filled_requires_positive_fill(self):
         with pytest.raises(ValueError, match="filled_quantity"):
             _open(remote_status="partially_filled", filled_quantity=Decimal("0"))
