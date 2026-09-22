@@ -286,6 +286,116 @@ class OrderRejectedByExchange(RemoteFact):
             )
         if isinstance(self.ret_code, bool) or not isinstance(self.ret_code, int):
             raise TypeError(f"ret_code must be int, got: {type(self.ret_code).__name__}")
+        if self.ret_code == 110072:
+            # ADR-013 D3, reforzado por la Resolución del STOP punto (5):
+            # "OrderRejectedByExchange rechazará ret_code=110072 en
+            # construcción cuando se implemente la ampliación" -- este es
+            # ese hito. 110072 es evidencia de que el SEGUNDO request
+            # (el reintento) fue rechazado, nunca de que la orden ORIGINAL
+            # X lo fue -- la orden real puede estar Filled. Representarlo
+            # como Rejected(X) sería un hecho falso en el ledger (la
+            # Projection concluiría "X rechazada, sin ejecución" mientras
+            # X puede tener capital movido). El hecho correcto es
+            # OrderIdentityReportedDuplicateByExchange, más abajo.
+            raise ValueError(
+                "ret_code must not be 110072 (ADR-013 D3): a duplicate-identity "
+                "rejection of the RETRY is never a terminal rejection of the "
+                "ORIGINAL order -- use OrderIdentityReportedDuplicateByExchange"
+            )
+        _require_non_empty_str(self.ret_msg, field="ret_msg")
+        _require_non_negative_int(self.server_time_ms, field="server_time_ms")
+
+
+@dataclass(frozen=True)
+class OrderIdentityReportedDuplicateByExchange(RemoteFact):
+    """Hecho REMOTE, NO TERMINAL: Bybit respondió síncronamente `retCode
+    110072` ("OrderLinkedID is duplicate") a un segundo request que
+    reutilizó `execution_order_id` -- séptimo tipo de evento, congelado
+    por la Resolución del STOP de ADR-013 (Opción B, 2026-09-21).
+
+    Autoridad REMOTE (respuesta síncrona a la propia submisión, ADR-010
+    D1), pero a diferencia de `OrderAcceptedByExchange`/
+    `OrderRejectedByExchange` -- los dos únicos tipos REMOTE existentes
+    hasta ahora, ambos terminales por convención documental -- este es
+    el PRIMER hecho REMOTE no terminal del modelo (ADR-013 D2/D5). La
+    Projection (ADR-011 D13) debe tratarlo como evidencia que nunca
+    cierra la orden X: el estado de X sigue derivándose exclusivamente
+    del último hecho terminal (`Accepted`/`Rejected`/futuro
+    `ObservedClosed`).
+
+    Demuestra, exclusivamente, la conjunción de dos hechos REMOTE
+    distintos que NUNCA deben fundirse (ADR-013 D2): (i) que el segundo
+    request fue rechazado; (ii) que Bybit afirma que la identidad
+    `execution_order_id` ya existe o existió dentro de un alcance de
+    unicidad no documentado (ADR-013 F2).
+
+    NO demuestra -- PROHIBITED INFERENCE explícita de ADR-013 D1:
+      - que la orden original (`OrderSubmissionAttempted(X)`) fue
+        aceptada tal como se intentó -- la economía nunca se verifica
+        aquí (comparador económico, ADR-013 D8/OQ5, fuera de alcance);
+      - que fue rechazada -- sólo el SEGUNDO request lo fue;
+      - que sigue abierta;
+      - que está cerrada;
+      - que fue llenada;
+      - que es seguro reenviar con X o con una `ExecutionOrderId` nueva
+        (ADR-013 D6: PROHIBIDO incondicionalmente).
+
+    Coexiste legítimamente con un `OrderSubmissionOutcomeUnknown(X)`
+    previo -- son hechos LOCAL y REMOTE distintos que aportan
+    información distinta, ninguno sustituye ni deduplica al otro
+    (ADR-013 F9/D2) -- y con la observación posterior
+    (`OrderObservedOpen`/futuro `OrderObservedClosed`), sin
+    contradicción estructural.
+
+    Deliberadamente **sin** heredar de `OrderRejectedByExchange` ni de
+    ningún otro tipo concreto (Resolución del STOP, punto 1): comparten
+    esqueleto de campos por coincidencia semántica superficial (ambos
+    preservan `ret_code`/`ret_msg`/`server_time_ms` verbatim), no por
+    relación de tipos -- fundirlos reintroduciría la ambigüedad de
+    terminalidad que este séptimo tipo existe para eliminar (Opción C,
+    descartada en ADR-013 por D3).
+
+    Payload mínimo V1, deliberadamente SIN:
+      - `exchange_order_id` -- Bybit no lo entrega en esta respuesta; su
+        ausencia es estructural, nunca opcional ni inferible (a
+        diferencia de `OrderAcceptedByExchange`, donde es obligatorio);
+      - cualquier campo económico (`symbol`/`side`/`order_type`/
+        `quantity`/`price`/`reduce_only`) -- la economía de la intención
+        original ya vive en `OrderSubmissionAttempted(X)` (ADR-010 D2);
+        duplicarla aquí sería redundante y podría malinterpretarse como
+        economía ya verificada del hecho remoto, cuando la verificación
+        (ADR-013 D8) es responsabilidad de un componente futuro
+        explícito, nunca implícita en este payload.
+
+    `ret_code` es INVARIANTE en V1: exactamente `110072`. La eventual
+    absorción de `110014`/`110030` (ADR-013 OQ2) exigiría una decisión
+    explícita futura, nunca una generalización silenciosa aquí.
+
+    `server_time_ms` es metadato de observación de ESTA respuesta (el
+    `time_ms` del envelope de Bybit que reportó 110072) -- mismo
+    tratamiento que en `OrderAcceptedByExchange`/`OrderRejectedByExchange`
+    (ADR-010 F4) y que en `OrderObservedOpen`/`BybitOrderHistoryOrderFound`
+    (ADR-012 C2): nunca se reinterpreta como tiempo de creación de la
+    orden original, `occurred_at_ms` del envelope, ni como economía.
+    """
+
+    execution_order_id: ExecutionOrderId
+    ret_code: int
+    ret_msg: str
+    server_time_ms: int
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.execution_order_id, ExecutionOrderId):
+            raise TypeError(
+                f"execution_order_id must be ExecutionOrderId, "
+                f"got: {type(self.execution_order_id).__name__}"
+            )
+        if isinstance(self.ret_code, bool) or not isinstance(self.ret_code, int):
+            raise TypeError(f"ret_code must be int, got: {type(self.ret_code).__name__}")
+        if self.ret_code != 110072:
+            raise ValueError(
+                f"ret_code must be exactly 110072 in V1 (ADR-013), got: {self.ret_code}"
+            )
         _require_non_empty_str(self.ret_msg, field="ret_msg")
         _require_non_negative_int(self.server_time_ms, field="server_time_ms")
 

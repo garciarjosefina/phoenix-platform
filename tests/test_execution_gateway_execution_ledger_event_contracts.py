@@ -5,6 +5,7 @@ from decimal import Decimal
 
 import pytest
 
+import execution_gateway
 from execution_gateway import execution_ledger_event_contracts as _events
 from execution_gateway.execution_identity_contracts import ExecutionAccountId, ExecutionOrderId
 from execution_gateway.execution_ledger_event_contracts import (
@@ -15,6 +16,7 @@ from execution_gateway.execution_ledger_event_contracts import (
     LocalFact,
     ObservedFact,
     OrderAcceptedByExchange,
+    OrderIdentityReportedDuplicateByExchange,
     OrderObservedOpen,
     OrderRejectedByExchange,
     OrderSubmissionAttempted,
@@ -65,6 +67,15 @@ def _observed(**overrides):
     )
     defaults.update(overrides)
     return OrderObservedOpen(**defaults)
+
+
+def _duplicate(**overrides):
+    defaults = dict(
+        execution_order_id=_ORDER_ID, ret_code=110072,
+        ret_msg="OrderLinkedID is duplicate", server_time_ms=1000,
+    )
+    defaults.update(overrides)
+    return OrderIdentityReportedDuplicateByExchange(**defaults)
 
 
 def _envelope(*, payload, event_id="evt-1", account=_ACCOUNT, occurred_at_ms=1000):
@@ -488,6 +499,25 @@ class TestOrderRejectedByExchange:
         sig = inspect.signature(OrderRejectedByExchange.__init__)
         assert "authority" not in sig.parameters
 
+    # -----------------------------------------------------------------
+    # ADR-013 D3, reforzado por la Resolución del STOP punto (5): 110072
+    # NUNCA es representable como OrderRejectedByExchange -- el hecho
+    # correcto es OrderIdentityReportedDuplicateByExchange (Hito 3.89).
+    # -----------------------------------------------------------------
+
+    def test_rejects_ret_code_110072(self):
+        with pytest.raises(ValueError, match="110072"):
+            _rejected(ret_code=110072)
+
+    @pytest.mark.parametrize("ret_code", [10001, 110003, 110004, 110007])
+    def test_other_documented_rejection_codes_still_construct(self, ret_code):
+        # El conjunto de rechazo de negocio reconocido hoy en
+        # bybit_gateway.py (_ORDER_REJECTION_RET_CODES) sigue funcionando
+        # sin cambio -- la guarda nueva es exclusiva de 110072, no una
+        # ampliación de la validación general de ret_code.
+        ev = _rejected(ret_code=ret_code)
+        assert ev.ret_code == ret_code
+
 
 # ---------------------------------------------------------------------------
 # OrderObservedOpen
@@ -551,7 +581,7 @@ class TestOrderObservedOpen:
     def test_orphan_open_order_case_has_no_dedicated_event_type_in_v1(self):
         # Resolución del STOP: las huérfanas (order_id is None en
         # ExecutionOpenOrder) NO generan OrderObservedOpen y NO existe
-        # todavía ningún sexto tipo de evento (p. ej.
+        # ningún tipo de evento dedicado (p. ej.
         # "UnattributedOrderObservedOpen") para representarlas -- siguen
         # siendo observables únicamente vía Reconciliation V1
         # (UnattributedExchangeOpenOrder). Deuda arquitectónica explícita,
@@ -562,12 +592,14 @@ class TestOrderObservedOpen:
             if isinstance(obj, type) and issubclass(obj, ExecutionLedgerEventPayload)
         }
         assert "UnattributedOrderObservedOpen" not in event_type_names
-        # Exactamente 5 tipos concretos + el marcador base + los 3
-        # marcadores de autoridad = 9; ninguno adicional para huérfanas.
+        # Exactamente 6 tipos concretos (5 de ADR-010/Hito 3.83 + el
+        # séptimo tipo de ADR-013/Hito 3.89, OrderIdentityReportedDuplicate
+        # ByExchange) + el marcador base + los 3 marcadores de autoridad =
+        # 10; ninguno adicional para huérfanas.
         concrete_event_types = event_type_names - {
             "ExecutionLedgerEventPayload", "LocalFact", "RemoteFact", "ObservedFact",
         }
-        assert len(concrete_event_types) == 5
+        assert len(concrete_event_types) == 6
 
     def test_status_validated(self):
         with pytest.raises(ValueError):
@@ -592,16 +624,268 @@ class TestOrderObservedOpen:
 
 
 # ---------------------------------------------------------------------------
-# execution_order_id: type-safety sistemática y simétrica entre los cinco
+# Export a nivel de paquete (Hito 3.89 §16/§21 M11) -- ningún tipo de
+# evento anterior tenía cobertura explícita de su presencia en
+# execution_gateway.__all__/namespace; se agrega aquí sólo para el tipo
+# nuevo, mismo patrón `TestImport` usado en 3.86/3.88.
+# ---------------------------------------------------------------------------
+
+class TestPackageExport:
+    def test_importable_from_package(self):
+        assert execution_gateway.OrderIdentityReportedDuplicateByExchange is (
+            OrderIdentityReportedDuplicateByExchange
+        )
+
+    def test_in_all(self):
+        assert "OrderIdentityReportedDuplicateByExchange" in execution_gateway.__all__
+
+
+# ---------------------------------------------------------------------------
+# OrderIdentityReportedDuplicateByExchange (Hito 3.89, ADR-013 Opción B,
+# séptimo tipo de evento -- REMOTE, NO TERMINAL, representa Bybit
+# retCode 110072 sobre una ExecutionOrderId reintentada).
+# ---------------------------------------------------------------------------
+
+class TestOrderIdentityReportedDuplicateByExchange:
+    # A. construcción válida
+    def test_constructs_validly(self):
+        ev = _duplicate()
+        assert ev.ret_code == 110072
+        assert ev.ret_msg == "OrderLinkedID is duplicate"
+        assert ev.server_time_ms == 1000
+
+    def test_is_frozen(self):
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            _duplicate().ret_code = 1
+
+    # B. preserva ExecutionOrderId (identidad de objeto, no sólo equality)
+    def test_preserves_execution_order_id_by_identity(self):
+        marker = ExecutionOrderId(value="ord_" + "c" * 32)
+        ev = _duplicate(execution_order_id=marker)
+        assert ev.execution_order_id is marker
+
+    # C. ret_code exactamente 110072
+    def test_ret_code_must_be_exactly_110072(self):
+        assert _duplicate(ret_code=110072).ret_code == 110072
+
+    # D. rechaza otros ints
+    @pytest.mark.parametrize("ret_code", [110071, 110073, 0, -1, 10001, 1])
+    def test_ret_code_rejects_other_ints(self, ret_code):
+        with pytest.raises(ValueError):
+            _duplicate(ret_code=ret_code)
+
+    # E. rechaza bool (True/False no deben colarse como int -- 110072 es
+    # un valor concreto, no un chequeo de truthiness)
+    @pytest.mark.parametrize("ret_code", [True, False])
+    def test_ret_code_rejects_bool(self, ret_code):
+        with pytest.raises(TypeError):
+            _duplicate(ret_code=ret_code)
+
+    # F. rechaza str "110072"
+    def test_ret_code_rejects_string(self):
+        with pytest.raises(TypeError):
+            _duplicate(ret_code="110072")
+
+    # G. rechaza float 110072.0
+    def test_ret_code_rejects_float(self):
+        with pytest.raises(TypeError):
+            _duplicate(ret_code=110072.0)
+
+    # H. ret_msg válido (preservado verbatim, sin normalizar)
+    def test_ret_msg_preserved_verbatim(self):
+        ev = _duplicate(ret_msg="  OrderLinkedID is duplicate  ")
+        assert ev.ret_msg == "  OrderLinkedID is duplicate  "
+
+    def test_ret_msg_not_required_to_be_the_literal_bybit_string(self):
+        # El código numérico es la semántica estable congelada por
+        # ADR-013 -- el texto remoto puede variar entre versiones de la
+        # API de Bybit y no se exige literal.
+        ev = _duplicate(ret_msg="duplicate order link id detected")
+        assert ev.ret_msg == "duplicate order link id detected"
+
+    # I. ret_msg wrong type
+    @pytest.mark.parametrize("bad", [None, 1, 1.5, True, [], {}, b"x", object()])
+    def test_ret_msg_rejects_non_str(self, bad):
+        with pytest.raises(TypeError):
+            _duplicate(ret_msg=bad)
+
+    def test_ret_msg_rejects_empty(self):
+        with pytest.raises(ValueError):
+            _duplicate(ret_msg="")
+
+    def test_ret_msg_rejects_whitespace_only(self):
+        with pytest.raises(ValueError):
+            _duplicate(ret_msg="   ")
+
+    # J. server_time_ms válido
+    def test_server_time_ms_preserved(self):
+        assert _duplicate(server_time_ms=42).server_time_ms == 42
+
+    def test_server_time_ms_can_be_zero(self):
+        assert _duplicate(server_time_ms=0).server_time_ms == 0
+
+    # K. server_time_ms wrong type
+    @pytest.mark.parametrize("bad", [None, "1000", 1.5, [], {}, object()])
+    def test_server_time_ms_rejects_non_int(self, bad):
+        with pytest.raises(TypeError):
+            _duplicate(server_time_ms=bad)
+
+    # L. server_time_ms límites/invariantes -- mismo patrón que
+    # OrderAcceptedByExchange/OrderRejectedByExchange/OrderObservedOpen
+    # (_require_non_negative_int: bool rechazado, negativo rechazado).
+    def test_server_time_ms_rejects_bool(self):
+        with pytest.raises(TypeError):
+            _duplicate(server_time_ms=True)
+
+    def test_server_time_ms_rejects_negative(self):
+        with pytest.raises(ValueError):
+            _duplicate(server_time_ms=-1)
+
+    # M/N/O. Authority estructural: REMOTE, nunca LOCAL ni OBSERVED
+    def test_is_remote_fact(self):
+        assert isinstance(_duplicate(), RemoteFact)
+
+    def test_is_not_local_fact(self):
+        assert not isinstance(_duplicate(), LocalFact)
+
+    def test_is_not_observed_fact(self):
+        assert not isinstance(_duplicate(), ObservedFact)
+
+    def test_authority_is_structural_not_configurable(self):
+        sig = inspect.signature(OrderIdentityReportedDuplicateByExchange.__init__)
+        assert "authority" not in sig.parameters
+
+    # P/Q. payload funciona en el envelope existente, sin ampliarlo
+    def test_works_as_envelope_payload(self):
+        event = _envelope(payload=_duplicate())
+        assert isinstance(event.payload, OrderIdentityReportedDuplicateByExchange)
+
+    def test_envelope_still_has_exactly_four_fields_with_this_payload(self):
+        event = _envelope(payload=_duplicate())
+        names = {f.name for f in dataclasses.fields(event)}
+        assert names == {"event_id", "execution_account_id", "occurred_at_ms", "payload"}
+
+    # R. no exchange_order_id (estructuralmente ausente, no opcional)
+    def test_no_exchange_order_id_field(self):
+        names = {f.name for f in dataclasses.fields(OrderIdentityReportedDuplicateByExchange)}
+        assert "exchange_order_id" not in names
+
+    # S. no economics
+    def test_no_economic_fields(self):
+        names = {f.name for f in dataclasses.fields(OrderIdentityReportedDuplicateByExchange)}
+        for forbidden in ("symbol", "side", "order_type", "quantity", "price", "reduce_only"):
+            assert forbidden not in names
+
+    # T. no bot_id
+    def test_no_bot_id_field(self):
+        names = {f.name for f in dataclasses.fields(OrderIdentityReportedDuplicateByExchange)}
+        assert "execution_bot_id" not in names
+        assert "bot_id" not in names
+
+    # U. no credentials/raw response
+    def test_no_credential_or_raw_response_fields(self):
+        names = {f.name for f in dataclasses.fields(OrderIdentityReportedDuplicateByExchange)}
+        for forbidden in (
+            "api_key", "api_secret", "signature", "headers", "credential",
+            "raw_response", "request_body", "body",
+        ):
+            assert not any(forbidden in n for n in names)
+
+    # Exact field set -- mismo patrón que TestExactFieldSets para los
+    # otros seis tipos.
+    def test_exact_field_set(self):
+        names = {f.name for f in dataclasses.fields(OrderIdentityReportedDuplicateByExchange)}
+        assert names == {"execution_order_id", "ret_code", "ret_msg", "server_time_ms"}
+
+    def test_payload_marker_is_never_used_as_a_concrete_event_type(self):
+        assert type(_duplicate()) is not ExecutionLedgerEventPayload
+        assert type(_duplicate()) not in (LocalFact, RemoteFact, ObservedFact)
+
+    # No-terminalidad estructural (ADR-013 D5): el modelo hoy no tiene
+    # ningún marcador/campo de terminalidad -- auditado antes de escribir
+    # este test (Accepted/Rejected son terminales sólo por convención
+    # documental, nunca por un campo o clase base compartida). No se crea
+    # ninguna abstracción nueva aquí; sólo se confirma que este tipo no
+    # hereda de los dos tipos REMOTE terminales existentes ni introduce
+    # vocabulario de cierre.
+    def test_does_not_inherit_from_accepted_or_rejected(self):
+        assert not issubclass(OrderIdentityReportedDuplicateByExchange, OrderAcceptedByExchange)
+        assert not issubclass(OrderIdentityReportedDuplicateByExchange, OrderRejectedByExchange)
+        assert not issubclass(OrderAcceptedByExchange, OrderIdentityReportedDuplicateByExchange)
+        assert not issubclass(OrderRejectedByExchange, OrderIdentityReportedDuplicateByExchange)
+
+    def test_is_a_distinct_type_from_accepted_and_rejected(self):
+        assert type(_duplicate()) is not OrderAcceptedByExchange
+        assert type(_duplicate()) is not OrderRejectedByExchange
+
+    def test_no_terminality_vocabulary_in_field_names(self):
+        names = {f.name for f in dataclasses.fields(OrderIdentityReportedDuplicateByExchange)}
+        for forbidden in ("terminal", "is_terminal", "closed", "final", "outcome"):
+            assert not any(forbidden in n for n in names)
+
+    def test_no_terminality_or_resolution_methods(self):
+        for forbidden in (
+            "mutate", "correct", "replace", "mark_resolved", "resolve",
+            "close", "finalize", "terminate",
+        ):
+            assert not hasattr(OrderIdentityReportedDuplicateByExchange, forbidden)
+
+
+# ---------------------------------------------------------------------------
+# Coexistencia estructural con otros hechos (Hito 3.89 §18/§10): sólo
+# construcción de objetos -- sin Projection, sin state machine. Si
+# OrderObservedClosed todavía no existe, no se inventa aquí.
+# ---------------------------------------------------------------------------
+
+class TestCoexistenceWithOtherFacts:
+    def test_attempted_unknown_and_duplicate_construct_for_the_same_order_id(self):
+        attempt = _attempt(execution_order_id=_ORDER_ID)
+        unknown = _unknown(execution_order_id=_ORDER_ID)
+        duplicate = _duplicate(execution_order_id=_ORDER_ID)
+        assert attempt.execution_order_id == unknown.execution_order_id == duplicate.execution_order_id
+        # tres hechos distintos, ninguno sustituye a otro
+        assert type(attempt) is not type(unknown) is not type(duplicate)
+        assert len({type(attempt), type(unknown), type(duplicate)}) == 3
+
+    def test_duplicate_does_not_mutate_or_invalidate_prior_unknown(self):
+        unknown = _unknown(execution_order_id=_ORDER_ID)
+        snapshot = repr(unknown)
+        _duplicate(execution_order_id=_ORDER_ID)
+        assert repr(unknown) == snapshot
+
+    def test_duplicate_and_observed_open_coexist_for_the_same_order_id(self):
+        # Caso (b) de ADR-013 D13: 110072 -> realtime FOUND New ->
+        # ObservedOpen. Sólo se comprueba compatibilidad ESTRUCTURAL
+        # (ambos se construyen sin excepción) -- ninguna orquestación,
+        # ninguna Projection.
+        duplicate = _duplicate(execution_order_id=_ORDER_ID)
+        observed = _observed(execution_order_id=_ORDER_ID)
+        assert duplicate.execution_order_id == observed.execution_order_id
+        assert type(duplicate) is not type(observed)
+
+    def test_two_facts_for_same_order_id_can_coexist_in_the_same_envelope_account(self):
+        duplicate = _duplicate(execution_order_id=_ORDER_ID)
+        observed = _observed(execution_order_id=_ORDER_ID)
+        ev1 = _envelope(payload=duplicate, event_id="evt-dup")
+        ev2 = _envelope(payload=observed, event_id="evt-obs")
+        assert ev1.execution_account_id == ev2.execution_account_id
+        assert ev1.event_id != ev2.event_id
+        assert ev1.payload is duplicate
+        assert ev2.payload is observed
+
+
+# ---------------------------------------------------------------------------
+# execution_order_id: type-safety sistemática y simétrica entre los seis
 # tipos de evento order-scoped (cierre del hallazgo IMPORTANTE de la
 # auditoría adversarial independiente post-3.83: OrderSubmissionOutcomeUnknown
 # y OrderRejectedByExchange carecían de esta cobertura conductual, pese a
 # que la producción ya validaba correctamente en las cinco clases -- hueco
 # de cobertura, nunca un defecto de comportamiento, confirmado
-# manualmente antes de escribir cualquier test nuevo).
+# manualmente antes de escribir cualquier test nuevo). Extendido en el
+# Hito 3.89 al séptimo tipo, OrderIdentityReportedDuplicateByExchange.
 #
 # Parametrizado por (builder, bad_value) para que un fallo señale sin
-# ambigüedad CUÁL de los cinco tipos dejó de validar -- nunca origen por
+# ambigüedad CUÁL de los tipos dejó de validar -- nunca origen por
 # inspección de fuente.
 # ---------------------------------------------------------------------------
 
@@ -610,6 +894,7 @@ _EVENT_ORDER_ID_BUILDERS = {
     "OrderSubmissionOutcomeUnknown": _unknown,
     "OrderAcceptedByExchange": _accepted,
     "OrderRejectedByExchange": _rejected,
+    "OrderIdentityReportedDuplicateByExchange": _duplicate,
     "OrderObservedOpen": _observed,
 }
 
@@ -652,11 +937,14 @@ class TestAuthority:
     def test_rejected_is_remote(self):
         assert isinstance(_rejected(), RemoteFact)
 
+    def test_duplicate_is_remote(self):
+        assert isinstance(_duplicate(), RemoteFact)
+
     def test_observed_open_is_observed(self):
         assert isinstance(_observed(), ObservedFact)
 
     def test_authorities_are_mutually_exclusive_marker_hierarchies(self):
-        events = [_attempt(), _unknown(), _accepted(), _rejected(), _observed()]
+        events = [_attempt(), _unknown(), _accepted(), _rejected(), _duplicate(), _observed()]
         for event in events:
             markers = [isinstance(event, m) for m in (LocalFact, RemoteFact, ObservedFact)]
             assert sum(markers) == 1
@@ -664,7 +952,7 @@ class TestAuthority:
     def test_no_payload_class_exposes_a_settable_authority_field(self):
         for cls in (
             OrderSubmissionAttempted, OrderSubmissionOutcomeUnknown, OrderAcceptedByExchange,
-            OrderRejectedByExchange, OrderObservedOpen,
+            OrderRejectedByExchange, OrderIdentityReportedDuplicateByExchange, OrderObservedOpen,
         ):
             names = {f.name for f in dataclasses.fields(cls)}
             assert "authority" not in names
@@ -674,7 +962,7 @@ class TestAuthority:
         # marcadora es documentalmente "nunca instanciada directamente",
         # no forzado en runtime -- confirmamos que ningún tipo concreto
         # ES la propia clase marcadora (isinstance exacto, no subclase).
-        for event in (_attempt(), _unknown(), _accepted(), _rejected(), _observed()):
+        for event in (_attempt(), _unknown(), _accepted(), _rejected(), _duplicate(), _observed()):
             assert type(event) is not ExecutionLedgerEventPayload
             assert type(event) not in (LocalFact, RemoteFact, ObservedFact)
 
@@ -700,7 +988,8 @@ class TestUncertaintyRepresentation:
     def test_no_mutate_or_correct_or_resolve_methods_exist(self):
         for cls in (
             OrderSubmissionAttempted, OrderSubmissionOutcomeUnknown, OrderAcceptedByExchange,
-            OrderRejectedByExchange, OrderObservedOpen, ExecutionLedgerEvent,
+            OrderRejectedByExchange, OrderIdentityReportedDuplicateByExchange, OrderObservedOpen,
+            ExecutionLedgerEvent,
         ):
             for forbidden in ("mutate", "correct", "replace", "mark_resolved", "resolve"):
                 assert not hasattr(cls, forbidden)
@@ -769,6 +1058,10 @@ class TestExactFieldSets:
 
     def test_rejected_fields(self):
         names = {f.name for f in dataclasses.fields(OrderRejectedByExchange)}
+        assert names == {"execution_order_id", "ret_code", "ret_msg", "server_time_ms"}
+
+    def test_duplicate_fields(self):
+        names = {f.name for f in dataclasses.fields(OrderIdentityReportedDuplicateByExchange)}
         assert names == {"execution_order_id", "ret_code", "ret_msg", "server_time_ms"}
 
     def test_observed_open_fields(self):
@@ -840,7 +1133,8 @@ class TestPurity:
     def test_no_credential_shaped_fields_anywhere(self):
         for cls in (
             OrderSubmissionAttempted, OrderSubmissionOutcomeUnknown, OrderAcceptedByExchange,
-            OrderRejectedByExchange, OrderObservedOpen, ExecutionLedgerEvent,
+            OrderRejectedByExchange, OrderIdentityReportedDuplicateByExchange, OrderObservedOpen,
+            ExecutionLedgerEvent,
         ):
             names = {f.name for f in dataclasses.fields(cls)}
             for forbidden in ("api_key", "api_secret", "signature", "headers", "credential"):
@@ -849,7 +1143,8 @@ class TestPurity:
     def test_no_mutable_dict_or_list_fields(self):
         for cls in (
             OrderSubmissionAttempted, OrderSubmissionOutcomeUnknown, OrderAcceptedByExchange,
-            OrderRejectedByExchange, OrderObservedOpen, ExecutionLedgerEvent,
+            OrderRejectedByExchange, OrderIdentityReportedDuplicateByExchange, OrderObservedOpen,
+            ExecutionLedgerEvent,
         ):
             for field in dataclasses.fields(cls):
                 assert field.type not in ("dict", "list")
@@ -857,7 +1152,8 @@ class TestPurity:
     def test_all_payload_and_envelope_classes_are_frozen_dataclasses(self):
         for cls in (
             OrderSubmissionAttempted, OrderSubmissionOutcomeUnknown, OrderAcceptedByExchange,
-            OrderRejectedByExchange, OrderObservedOpen, ExecutionLedgerEvent,
+            OrderRejectedByExchange, OrderIdentityReportedDuplicateByExchange, OrderObservedOpen,
+            ExecutionLedgerEvent,
         ):
             assert dataclasses.is_dataclass(cls)
             assert cls.__dataclass_params__.frozen

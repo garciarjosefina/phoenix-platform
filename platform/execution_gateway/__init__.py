@@ -202,6 +202,7 @@ from execution_gateway.execution_ledger_event_contracts import (
     OrderSubmissionOutcomeUnknown,
     OrderAcceptedByExchange,
     OrderRejectedByExchange,
+    OrderIdentityReportedDuplicateByExchange,
     OrderObservedOpen,
     ExecutionLedgerEvent,
 )
@@ -410,6 +411,7 @@ __all__ = [
     "OrderSubmissionOutcomeUnknown",
     "OrderAcceptedByExchange",
     "OrderRejectedByExchange",
+    "OrderIdentityReportedDuplicateByExchange",
     "OrderObservedOpen",
     "ExecutionLedgerEvent",
     "BybitOrderHistoryLookupResult",
