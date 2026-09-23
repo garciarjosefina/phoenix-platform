@@ -770,6 +770,31 @@ class TestOrderIdentityReportedDuplicateByExchange:
         names = {f.name for f in dataclasses.fields(OrderIdentityReportedDuplicateByExchange)}
         assert "exchange_order_id" not in names
 
+    def test_no_exchange_order_id_attribute_on_real_instance(self):
+        # Auditoría adversarial final 3.89, hallazgo MENOR (N21):
+        # `dataclasses.fields()` inspecciona sólo los campos declarados de
+        # la clase -- una `@property` de sólo lectura llamada
+        # `exchange_order_id` que siempre devolviera `None` pasaría
+        # inadvertida por `test_no_exchange_order_id_field` de arriba,
+        # aunque `hasattr(instancia, "exchange_order_id")` sea `True` para
+        # ese mutante. Aquí se construye una instancia REAL y se
+        # inspecciona el OBJETO, no la clase -- `hasattr` sí discrimina
+        # una property. ADR-013, Resolución del STOP punto (1): "sin
+        # `exchange_order_id` (Bybit no lo entrega en esta respuesta; su
+        # ausencia es estructural, no opcional)". Se extiende, en el mismo
+        # test y sin parametrización adicional, al resto de atributos que
+        # ADR-013 prohíbe explícitamente para este tipo (bot ownership,
+        # economía, autoridad configurable, vocabulario de terminalidad) --
+        # ya cubiertos por separado a nivel de `dataclasses.fields()`, pero
+        # nunca antes a nivel de instancia real.
+        ev = _duplicate()
+        for forbidden in (
+            "exchange_order_id", "bot_id", "execution_bot_id", "symbol", "side",
+            "order_type", "quantity", "price", "reduce_only", "authority",
+            "terminal", "is_terminal", "status",
+        ):
+            assert not hasattr(ev, forbidden), forbidden
+
     # S. no economics
     def test_no_economic_fields(self):
         names = {f.name for f in dataclasses.fields(OrderIdentityReportedDuplicateByExchange)}
