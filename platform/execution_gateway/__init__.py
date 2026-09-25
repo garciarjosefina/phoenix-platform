@@ -251,6 +251,25 @@ from execution_gateway.bybit_demo_order_realtime_lookup_env_bootstrap import (
 from execution_gateway.bybit_demo_order_realtime_query import (
     query_bybit_demo_order_realtime_by_execution_order_id,
 )
+from execution_gateway.observed_order_economics_contracts import ObservedOrderEconomics
+from execution_gateway.observed_order_economics_projections import (
+    project_open_order_to_observed_economics,
+    project_closed_order_to_observed_economics,
+)
+from execution_gateway.economic_comparison_precondition_error import (
+    EconomicComparisonPreconditionError,
+)
+from execution_gateway.economic_comparison_contracts import (
+    EconomicDivergence,
+    EconomicSymbolMismatch,
+    EconomicSideMismatch,
+    EconomicOrderTypeMismatch,
+    EconomicQuantityMismatch,
+    EconomicPriceMismatch,
+    EconomicReduceOnlyMismatch,
+    EconomicComparisonResult,
+)
+from execution_gateway.economic_comparator import compare_attempted_order_to_observed_economics
 
 __all__ = [
     "__version__",
@@ -435,4 +454,17 @@ __all__ = [
     "create_configured_bybit_demo_order_realtime_lookup",
     "bootstrap_bybit_demo_order_realtime_lookup_from_env",
     "query_bybit_demo_order_realtime_by_execution_order_id",
+    "ObservedOrderEconomics",
+    "project_open_order_to_observed_economics",
+    "project_closed_order_to_observed_economics",
+    "EconomicComparisonPreconditionError",
+    "EconomicDivergence",
+    "EconomicSymbolMismatch",
+    "EconomicSideMismatch",
+    "EconomicOrderTypeMismatch",
+    "EconomicQuantityMismatch",
+    "EconomicPriceMismatch",
+    "EconomicReduceOnlyMismatch",
+    "EconomicComparisonResult",
+    "compare_attempted_order_to_observed_economics",
 ]
