@@ -8,16 +8,20 @@ def project_open_order_to_observed_economics(
 ) -> ObservedOrderEconomics:
     """Proyección MECÁNICA (Hito 3.91, ADR-014 Contrato Conceptual, punto
     B): copia los siete campos homónimos de una orden abierta encontrada
-    por `orderLinkId` (Hito 3.88) a `ObservedOrderEconomics`.
+    por `orderLinkId` (Hito 3.88) a `ObservedOrderEconomics` --
+    `execution_order_id`, `symbol`, `side`, `order_type`, `quantity`,
+    `price` y `reduce_only`, este último SÍ copiado literalmente: es una
+    de las siete dimensiones (ADR-014 D8/D2), nunca una de las ignoradas.
 
     Sin normalización adicional (symbol/side/order_type ya llegan
     normalizados desde el interpreter de 3.88, ADR-014 D6), sin I/O, sin
     reloj, sin storage, sin lógica condicional más allá de la que el
-    propio contrato de origen ya garantiza. Deliberadamente ignora
-    `exchange_order_id`, `filled_quantity`, `filled_value`,
-    `remote_status`, `reduce_only`... salvo el propio `reduce_only`, que
-    SÍ es una de las siete dimensiones (ADR-014 D8/D2) -- y todos los
-    timestamps del origen (ADR-014 D8)."""
+    propio contrato de origen ya garantiza. Deliberadamente ignora el
+    resto de los campos de `BybitRealtimeOrderFoundOpen` -- metadata y
+    evolución, nunca intención económica (ADR-014 D8): `exchange_order_id`,
+    `filled_quantity`, `filled_value`, `average_price`, `remote_status`,
+    `reject_reason`, `server_time_ms`, `remote_created_time_ms` y
+    `remote_updated_time_ms`."""
     if not isinstance(open_order, BybitRealtimeOrderFoundOpen):
         raise TypeError(
             f"open_order must be BybitRealtimeOrderFoundOpen, "

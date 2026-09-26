@@ -72,6 +72,36 @@ class TestProjectOpenOrder:
         )
         assert result.execution_order_id is marker
 
+    def test_copies_each_field_with_a_non_default_economy(self):
+        # Auditoría adversarial 3.91, IMPORTANTE-1: `test_copies_the_seven_fields`
+        # de arriba usa una economía (side="buy", symbol="BTCUSDT",
+        # reduce_only=False) que coincide EXACTAMENTE con los valores que
+        # una proyección defectuosa podría fijar como constante --
+        # `side="buy"` fijo, `symbol="BTCUSDT"` fijo o `reduce_only=False`
+        # fijo pasarían ese test sin copiar nada realmente. Aquí la
+        # economía de origen es deliberadamente la contraria en cada
+        # dimensión discriminable, con Decimal no triviales, y cada campo
+        # se verifica contra su valor literal esperado -- nunca contra el
+        # mismo diccionario de defaults que construyó el fixture.
+        order = _open_order(
+            symbol="ethusdt", side="sell", order_type="limit",
+            quantity=Decimal("0.137"), price=Decimal("1234.567"), reduce_only=True,
+        )
+        result = project_open_order_to_observed_economics(open_order=order)
+        assert result.symbol == "ethusdt"
+        assert result.side == "sell"
+        assert result.order_type == "limit"
+        assert result.quantity == Decimal("0.137")
+        assert result.price == Decimal("1234.567")
+        assert result.reduce_only is True
+
+    def test_symbol_with_padding_preserved_literal(self):
+        # "ethusdt" (sin espacios) no discrimina un strip() indebido --
+        # este fixture SÍ tiene espacios, así que una proyección que
+        # aplicara strip() produciría un valor distinto y detectable.
+        order = _open_order(symbol=" BTCUSDT ")
+        assert project_open_order_to_observed_economics(open_order=order).symbol == " BTCUSDT "
+
     def test_market_price_projects_to_none(self):
         order = _open_order(order_type="market", price=None)
         assert project_open_order_to_observed_economics(open_order=order).price is None
@@ -123,6 +153,32 @@ class TestProjectClosedOrder:
             closed_order=_closed_order(execution_order_id=marker)
         )
         assert result.execution_order_id is marker
+
+    def test_copies_each_field_with_a_non_default_economy(self):
+        # Auditoría adversarial 3.91, IMPORTANTE-1: mismo razonamiento que
+        # en OPEN -- una proyección con `symbol="BTCUSDT"` fijo o
+        # `reduce_only=False` fijo pasaría `test_copies_the_seven_fields`
+        # sin copiar nada. Economía deliberadamente distinta en cada
+        # dimensión, verificada campo por campo.
+        order = _closed_order(
+            symbol="ethusdt", side="sell", order_type="limit",
+            quantity=Decimal("0.137"), price=Decimal("1234.567"), reduce_only=True,
+            filled_quantity=Decimal("0.137"), filled_value=Decimal("169.1"),
+            remote_status="filled", average_price=Decimal("1234.0"),
+        )
+        result = project_closed_order_to_observed_economics(closed_order=order)
+        assert result.symbol == "ethusdt"
+        assert result.side == "sell"
+        assert result.order_type == "limit"
+        assert result.quantity == Decimal("0.137")
+        assert result.price == Decimal("1234.567")
+        assert result.reduce_only is True
+
+    def test_symbol_with_padding_preserved_literal(self):
+        # Auditoría adversarial 3.91 (N29b): "ethusdt" no discrimina un
+        # strip() indebido -- este fixture sí tiene espacios.
+        order = _closed_order(symbol=" BTCUSDT ")
+        assert project_closed_order_to_observed_economics(closed_order=order).symbol == " BTCUSDT "
 
     def test_market_price_projects_to_none(self):
         order = _closed_order(order_type="market", price=None)

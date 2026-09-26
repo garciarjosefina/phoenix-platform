@@ -206,6 +206,28 @@ class TestMatchCases:
         )
         assert _compare(attempted, observed).is_matched is True
 
+    def test_open_reduce_only_true_end_to_end_produces_exactly_reduce_only_mismatch(self):
+        # Auditoría adversarial 3.91, IMPORTANTE-1 punto 4: demuestra de
+        # punta a punta (lookup real -> proyección -> comparador) que
+        # `reduce_only=True` en la fuente remota sobrevive intacto hasta
+        # el resultado -- nunca se pierde ni se ignora en la proyección.
+        attempted = _attempted(symbol="BTCUSDT", side="buy", order_type="limit",
+                               quantity=Decimal("1"), price=Decimal("100"))
+        observed = project_open_order_to_observed_economics(
+            open_order=_open_order(symbol="BTCUSDT", side="buy", order_type="limit",
+                                   quantity=Decimal("1"), price=Decimal("100"), reduce_only=True)
+        )
+        result = _compare(attempted, observed)
+        assert len(result.divergences) == 1
+        assert isinstance(result.divergences[0], EconomicReduceOnlyMismatch)
+
+    def test_open_reduce_only_false_end_to_end_matches(self):
+        attempted = _attempted()
+        observed = project_open_order_to_observed_economics(
+            open_order=_open_order(reduce_only=False)
+        )
+        assert _compare(attempted, observed).is_matched is True
+
     def test_closed_rejected(self):
         attempted = _attempted()
         observed = project_closed_order_to_observed_economics(
@@ -245,6 +267,16 @@ class TestIsolatedMismatchPerDimension:
         assert len(result.divergences) == 1
         assert isinstance(result.divergences[0], EconomicSideMismatch)
 
+    def test_side_mismatch_evidence_orientation(self):
+        # Auditoría adversarial 3.91, MENOR-2: no basta con isinstance --
+        # los valores DEBEN estar en la orientación attempted/observed
+        # correcta, nunca intercambiados.
+        attempted = _attempted(side="buy")
+        result = _compare(attempted, observed=_observed(side="sell"))
+        divergence = result.divergences[0]
+        assert divergence.attempted_side == "buy"
+        assert divergence.observed_side == "sell"
+
     def test_order_type_and_price_mismatch_together(self):
         # No se puede aislar order_type sin afectar price: LIMIT local
         # (price=100) vs MARKET remoto (price=None) diverge en AMBAS
@@ -255,6 +287,17 @@ class TestIsolatedMismatchPerDimension:
         kinds = {type(d) for d in result.divergences}
         assert kinds == {EconomicOrderTypeMismatch, EconomicPriceMismatch}
         assert len(result.divergences) == 2
+
+    def test_order_type_mismatch_evidence_orientation(self):
+        # Auditoría adversarial 3.91, MENOR-2: la invariante cruzada hace
+        # imposible aislar order_type sin price (arriba), pero el
+        # contenido de EconomicOrderTypeMismatch en sí debe estar
+        # orientado correctamente igual.
+        attempted = _attempted(order_type="limit", price=Decimal("100"))
+        result = _compare(attempted, observed=_observed(order_type="market", price=None))
+        by_type = {type(d): d for d in result.divergences}
+        assert by_type[EconomicOrderTypeMismatch].attempted_order_type == "limit"
+        assert by_type[EconomicOrderTypeMismatch].observed_order_type == "market"
 
     def test_quantity_mismatch_only(self):
         result = _compare(observed=_observed(quantity=Decimal("2")))
@@ -280,6 +323,16 @@ class TestIsolatedMismatchPerDimension:
     def test_reduce_only_false_matches_constant(self):
         result = _compare(observed=_observed(reduce_only=False))
         assert result.is_matched is True
+
+    def test_symbol_with_padding_mismatches(self):
+        # Auditoría adversarial 3.91, MENOR-1: espacios alrededor de un
+        # symbol por lo demás idéntico deben seguir siendo un mismatch --
+        # ni strip() ni ninguna otra normalización debe aplicarse
+        # (ADR-014 D6).
+        attempted = _attempted(symbol="BTCUSDT")
+        result = _compare(attempted, observed=_observed(symbol=" BTCUSDT "))
+        assert result.is_matched is False
+        assert isinstance(result.divergences[0], EconomicSymbolMismatch)
 
 
 class TestMultiMismatch:
@@ -442,6 +495,57 @@ class TestDecimalSemantics:
         attempted = _attempted(price=Decimal("100"))
         observed = _observed(price=Decimal("100.00"))
         assert _compare(attempted, observed).is_matched is True
+
+
+# ---------------------------------------------------------------------------
+# Auditoría adversarial 3.91, IMPORTANTE-2: la prohibición de `float`/
+# `quantize` (ADR-014 D5) debe estar protegida por COMPORTAMIENTO, no sólo
+# por inspección de fuente (`TestPurity.test_no_float_in_source`). Cada
+# test de esta clase usa un par de `Decimal` DISTINTOS (nunca MATCH bajo
+# igualdad Decimal exacta) que una conversión a `float` o una cuantización
+# indebida colapsarían en el MISMO valor -- si el comparador alguna vez
+# hiciera esa conversión, produciría un MATCH falso en vez del MISMATCH
+# correcto. Esto es una garantía DISTINTA de "Decimal exactness"
+# (TestDecimalSemantics arriba, que sólo prueba que representaciones
+# YA-iguales por valor no producen falsos MISMATCH).
+# ---------------------------------------------------------------------------
+
+class TestFloatOrQuantizeCollapseWouldCauseFalseMatch:
+    def test_quantity_values_that_float_would_collapse_are_still_mismatch(self):
+        # float(Decimal("0.1")) == float(Decimal("0.1000...055...")) es
+        # True (ambos son el mismo double de 64 bits), pero como Decimal
+        # son valores DISTINTOS.
+        a = Decimal("0.1")
+        b = Decimal("0.1000000000000000055511151231257827021181583404541015625")
+        assert a != b
+        assert float(a) == float(b)  # precondición del ataque: colapsarían bajo float
+        attempted = _attempted(quantity=a)
+        observed = _observed(quantity=b)
+        result = _compare(attempted, observed)
+        assert result.is_matched is False
+        assert isinstance(result.divergences[0], EconomicQuantityMismatch)
+
+    def test_price_values_that_float_would_collapse_are_still_mismatch(self):
+        a = Decimal("100")
+        b = Decimal("100.00000000000000001")
+        assert a != b
+        assert float(a) == float(b)
+        attempted = _attempted(price=a)
+        observed = _observed(price=b)
+        result = _compare(attempted, observed)
+        assert result.is_matched is False
+        assert isinstance(result.divergences[0], EconomicPriceMismatch)
+
+    def test_quantity_values_that_quantize_to_four_decimals_would_collapse_are_still_mismatch(self):
+        a = Decimal("1.00000001")
+        b = Decimal("1.00000002")
+        assert a != b
+        assert a.quantize(Decimal("0.0001")) == b.quantize(Decimal("0.0001"))  # colapsarían con quantize indebido
+        attempted = _attempted(quantity=a)
+        observed = _observed(quantity=b)
+        result = _compare(attempted, observed)
+        assert result.is_matched is False
+        assert isinstance(result.divergences[0], EconomicQuantityMismatch)
 
 
 # ---------------------------------------------------------------------------
