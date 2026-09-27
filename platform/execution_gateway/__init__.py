@@ -270,6 +270,7 @@ from execution_gateway.economic_comparison_contracts import (
     EconomicComparisonResult,
 )
 from execution_gateway.economic_comparator import compare_attempted_order_to_observed_economics
+from execution_gateway.canonical_execution_decimal import canonical_execution_decimal
 
 __all__ = [
     "__version__",
@@ -467,4 +468,5 @@ __all__ = [
     "EconomicReduceOnlyMismatch",
     "EconomicComparisonResult",
     "compare_attempted_order_to_observed_economics",
+    "canonical_execution_decimal",
 ]

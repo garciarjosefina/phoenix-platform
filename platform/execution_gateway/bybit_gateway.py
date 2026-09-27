@@ -1,11 +1,9 @@
-import math
-from decimal import Decimal
-
 from execution_gateway.bybit_api_error import BybitApiError
 from execution_gateway.bybit_client import BybitDemoClient
 from execution_gateway.bybit_create_order_request import BybitCreateOrderRequest
 from execution_gateway.bybit_create_order_result import BybitCreateOrderResult
 from execution_gateway.bybit_response_processing_error import BybitResponseProcessingError
+from execution_gateway.canonical_execution_decimal import canonical_execution_decimal
 from execution_gateway.contracts import ExecutionRequest, ExecutionResult
 from execution_gateway.execution_infrastructure_error import ExecutionInfrastructureError
 from execution_gateway.execution_request_not_supported_error import ExecutionRequestNotSupportedError
@@ -66,8 +64,8 @@ class BybitExecutionGateway:
             symbol=request.symbol,
             side=_SIDE_TO_BYBIT[request.side],
             order_type=_ORDER_TYPE_TO_BYBIT[request.order_type],
-            quantity=_to_plain_decimal(request.quantity),
-            price=_to_plain_decimal(request.price) if request.price is not None else None,
+            quantity=canonical_execution_decimal(request.quantity),
+            price=canonical_execution_decimal(request.price) if request.price is not None else None,
             time_in_force=_DEFAULT_TIME_IN_FORCE,
             reduce_only=False,
             order_link_id=request.order_id,
@@ -92,9 +90,3 @@ class BybitExecutionGateway:
             status="rejected",
             error_message=error.ret_msg,
         )
-
-
-def _to_plain_decimal(value: float) -> Decimal:
-    if not math.isfinite(value):
-        raise ExecutionRequestNotSupportedError(message=_ADAPTATION_ERROR_MESSAGE)
-    return Decimal(str(value))

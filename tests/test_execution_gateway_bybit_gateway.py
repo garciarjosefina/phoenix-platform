@@ -705,6 +705,104 @@ class TestFiniteNumericTranslation:
         assert translated == Decimal("123456789.123")
 
 
+# ---------------------------------------------------------------------------
+# Hito 3.92 (ADR-014 G2): single authority -- el adapter debe DELEGAR en
+# `canonical_execution_decimal`, nunca reimplementar su propia conversión.
+# ---------------------------------------------------------------------------
+
+class TestSingleAuthorityForEconomicConversion:
+    def test_adapter_delegates_quantity_conversion_to_canonical_authority(self, monkeypatch):
+        # M5: si el adapter reimplementara Decimal(str(value)) de forma
+        # independiente en vez de llamar a la autoridad compartida, este
+        # test no vería el centinela y fallaría -- prueba conductual de
+        # single authority, no una inspección de texto.
+        sentinel = Decimal("999.999")
+        monkeypatch.setattr(
+            "execution_gateway.bybit_gateway.canonical_execution_decimal",
+            lambda value: sentinel,
+        )
+        client = _ValidClient(_make_bybit_result())
+        gw = BybitExecutionGateway(client=client)
+        gw.execute(_make_request(quantity=0.001))
+        assert client.received_requests[0].quantity == sentinel
+
+    def test_adapter_delegates_price_conversion_to_canonical_authority(self, monkeypatch):
+        sentinel = Decimal("888.888")
+        monkeypatch.setattr(
+            "execution_gateway.bybit_gateway.canonical_execution_decimal",
+            lambda value: sentinel,
+        )
+        client = _ValidClient(_make_bybit_result())
+        gw = BybitExecutionGateway(client=client)
+        gw.execute(_make_request(order_type="limit", quantity=1.0, price=50_000.0))
+        assert client.received_requests[0].price == sentinel
+
+    def test_canonical_authority_called_exactly_once_per_field(self, monkeypatch):
+        calls = []
+
+        def _spy(value):
+            calls.append(value)
+            from execution_gateway.canonical_execution_decimal import canonical_execution_decimal as real
+            return real(value)
+
+        monkeypatch.setattr("execution_gateway.bybit_gateway.canonical_execution_decimal", _spy)
+        client = _ValidClient(_make_bybit_result())
+        gw = BybitExecutionGateway(client=client)
+        gw.execute(_make_request(order_type="limit", quantity=0.001, price=50_000.0))
+        assert calls == [0.001, 50_000.0]
+
+
+# ---------------------------------------------------------------------------
+# Hito 3.92 §6/§7: paridad de payload MARKET/LIMIT tras el refactor, y
+# evidencia de que la autoridad canónica producirá exactamente lo que el
+# futuro `OrderSubmissionAttempted` durable necesitará reutilizar.
+# ---------------------------------------------------------------------------
+
+class TestPayloadParityMatrix:
+    @pytest.mark.parametrize("quantity", [0.1, 0.01, 0.001, 1.1])
+    def test_market_quantity_parity(self, quantity):
+        client = _ValidClient(_make_bybit_result())
+        gw = BybitExecutionGateway(client=client)
+        gw.execute(_make_request(order_type="market", quantity=quantity, price=None))
+        received = client.received_requests[0]
+        assert received.quantity == Decimal(str(quantity))
+        assert received.price is None
+
+    @pytest.mark.parametrize("quantity", [0.1, 0.01, 0.001, 1.1])
+    @pytest.mark.parametrize("price", [33333.33, 0.001, 100.0])
+    def test_limit_quantity_and_price_parity(self, quantity, price):
+        client = _ValidClient(_make_bybit_result())
+        gw = BybitExecutionGateway(client=client)
+        gw.execute(_make_request(order_type="limit", quantity=quantity, price=price))
+        received = client.received_requests[0]
+        assert received.quantity == Decimal(str(quantity))
+        assert received.price == Decimal(str(price))
+
+
+class TestFutureAttemptedParityEvidence:
+    """Sin construir el wrapper todavía (Hito 3.92 no integra
+    `OrderSubmissionAttempted`): demuestra que `canonical_execution_decimal`
+    produce, para la misma economía, exactamente el `Decimal` que el
+    adapter ya usa -- la garantía que el futuro wrapper reutilizará sin
+    reimplementar nada."""
+
+    @pytest.mark.parametrize("quantity", [0.1, 0.01, 0.001, 1.1, 0.3, 123456789.123])
+    def test_canonical_quantity_matches_adapter_quantity(self, quantity):
+        from execution_gateway.canonical_execution_decimal import canonical_execution_decimal
+        client = _ValidClient(_make_bybit_result())
+        gw = BybitExecutionGateway(client=client)
+        gw.execute(_make_request(order_type="market", quantity=quantity, price=None))
+        assert canonical_execution_decimal(quantity) == client.received_requests[0].quantity
+
+    @pytest.mark.parametrize("price", [100.0, 50_000.0, 0.001, 33333.33])
+    def test_canonical_price_matches_adapter_price_for_limit(self, price):
+        from execution_gateway.canonical_execution_decimal import canonical_execution_decimal
+        client = _ValidClient(_make_bybit_result())
+        gw = BybitExecutionGateway(client=client)
+        gw.execute(_make_request(order_type="limit", quantity=1.0, price=price))
+        assert canonical_execution_decimal(price) == client.received_requests[0].price
+
+
 class TestExistingSuiteUnaffected:
     def test_gateway_config_still_works(self):
         from execution_gateway.config import GatewayConfig

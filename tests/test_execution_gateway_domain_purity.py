@@ -10,6 +10,7 @@ import inspect
 
 import pytest
 
+import execution_gateway.canonical_execution_decimal as canonical_execution_decimal_module
 import execution_gateway.contracts as contracts_module
 import execution_gateway.execution_infrastructure_error as execution_infrastructure_error_module
 import execution_gateway.execution_request_not_supported_error as execution_request_not_supported_error_module
@@ -34,6 +35,7 @@ _DOMAIN_ONLY_MODULES = (
     execution_infrastructure_error_module,
     execution_request_not_supported_error_module,
     factory_module,
+    canonical_execution_decimal_module,
 )
 
 _KNOWN_EXCHANGE_NAMES = ("Bybit", "Binance", "OKX", "Hyperliquid")
@@ -102,7 +104,10 @@ class TestOnlyTheAdapterKnowsBybitTypes:
         assert "BybitCreateOrderResult" in src
 
     def test_no_other_domain_module_imports_bybit_create_order_types(self):
-        for module_name in ("gateway", "contracts", "dry_run_gateway", "fake_gateway", "factory"):
+        for module_name in (
+            "gateway", "contracts", "dry_run_gateway", "fake_gateway", "factory",
+            "canonical_execution_decimal",
+        ):
             module = __import__(f"execution_gateway.{module_name}", fromlist=[module_name])
             src = inspect.getsource(module)
             assert "BybitCreateOrderRequest" not in src
