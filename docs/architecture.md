@@ -725,3 +725,33 @@ Implements exactly the two remaining debts ADR-014 froze (G2, canonical `float �
 **Single residual finding, documentary only**: the implementation row still asserted "no behavior change" without qualification, and the M6 narrative still described the `price` variant as simply "SOBREVIVE" without noting it dies against the full suite by textual representation, not by value. Both corrected in this same closure, touching neither production nor tests.
 
 **Hito 3.92 is now ACCEPTED — the last accepted code hito, superseding Hito 3.91 in that role.** Frozen: `canonical_execution_decimal()` as the sole `float → Decimal` authority; its reuse by the Bybit adapter for `quantity` and LIMIT `price` (`price=None` unchanged for MARKET); the single-authority guarantee verified by sentinel/binding; `reduce_only=False` as an ABSOLUTE semantic (not merely relative to the comparator), aligned with `economic_comparator._ATTEMPTED_REDUCE_ONLY`; and the tripwire's discrimination across all six `ExecutionRequest` dimensions. Debts explicitly preserved: **G1** (`time_in_force="GTC"` still not comparable), **G4** (no full closed-order domain type, non-blocking); `ExecutionRequest`/`ExecutionResult` remain `float`, not migrated to `Decimal` (preferred long-term direction, not done here); the pre-existing input-contract behavior (`bool`/non-finite values accepted by `ExecutionRequest` before reaching the adapter) is untouched, a debt that predates 3.92. **Boundary now enabled, not yet built**: `ExecutionRequest → canonical_execution_decimal → a future durable OrderSubmissionAttempted`'s economics already share the same authority the adapter uses — a numeric precondition a future wrapper can reuse without reimplementing it. **Next candidate frontier, not assumed to be a single hito**: forensic reconstruction of the control-flow and responsibility boundaries for write-side integration/orchestration and recovery around a durable `OrderSubmissionAttempted` → remote order creation → `Accepted`/`Rejected`/`Unknown`/`Duplicate` → `realtime`/`history` lookup → `ObservedOrderEconomics` → `EconomicComparator` → observed event, respecting ADR-011/012/013/014 and the durability decisions of Hitos 3.84–3.92. Never integrate the wrapper before that design is explicit.
+
+## 26. Write-Side Submission & Recovery Control-Flow (Hito 3.93 — DESIGNED, not implemented)
+
+Design only (ADR-015). Zero production, zero tests, suite 6936 unchanged.
+
+**Decisive finding.** The accepted `ExecutionGateway` Port cannot carry what the accepted ledger events require: `OrderAcceptedByExchange`, `OrderRejectedByExchange`, and `OrderIdentityReportedDuplicateByExchange` all require `server_time_ms` (the latter two also `ret_code`), but `ExecutionResult` has neither, `BybitCreateOrderResult` has no time, and the create-order interpreter drops `BybitResponse.time_ms` on both acceptance and rejection. A wrapper around `ExecutionGateway.execute()` — ADR-011 D6 as literally written — therefore cannot construct those events without fabricating data.
+
+**Frozen control-flow (not built).**
+
+```
+ExecutionSubmissionCoordinator  (per ExecutionAccountId, under an exclusive account lease)
+  gate (derived from ledger) → X must be a fresh ExecutionOrderId with no prior Attempted
+  → canonical_execution_decimal → append(Attempted) → AppendReceipt (durable, Postgres)
+  → OrderSubmissionPort.submit  (new exchange-agnostic port; Bybit adapter is a new sibling of
+                                 BybitExecutionGateway, which stays byte-identical)
+  → Accepted | Rejected | IdentityReportedDuplicate | OutcomeUnknown(reason)  → append
+ExecutionRecoveryService        (same lease; read-only remote)
+  unresolved X → realtime by X → [not found] history by X → project → EconomicComparator
+  → MATCH: append ObservedOpen/ObservedClosed   MISMATCH / double NOT_FOUND / lookup error: no append
+```
+
+- **Zero automatic resend** in V1: exactly one remote create-order per X, ever. No current error proves a retry safe.
+- **Account blocked = derived from the ledger**: no new submissions while any X has `Attempted` without a resolving fact (`Accepted`, `Rejected`, `ObservedOpen`, `ObservedClosed`), or while the ledger is unreachable. `Unknown` and `IdentityReportedDuplicate` do not resolve.
+- **Exclusive account lease** (PostgreSQL session advisory lock) over the whole critical section and over recovery; the per-append transactional lock alone does not prevent races between steps or workers.
+- **Idempotency**: `UNIQUE(account, X, event_type)` holds for six event types (for `Unknown` only because resend is forbidden) but not for `ObservedOpen` → partial unique index, stable-content dedup for `ObservedOpen`, and stable-content comparison on any key collision (never a silent collapse of a different `Attempted(X)`).
+- **Post-remote append failure**: bounded retry of the same append → structured emergency evidence → account stays blocked by derivation → error to caller; never resend, never a new X, never success.
+
+**Crash matrix**: safe resend is **NO** at every point after an `Attempted` exists — no ledger state can prove an order did not leave. **Build order (DAG)**: contracts (`OrderObservedClosed`, submission port/outcomes, Writer/Reader/Lease protocols) → Bybit submission adapter ∥ Postgres Writer/Reader/Lease → account gate → recovery ∥ coordinator → composition root + account↔credentials binding. Recovery and coordinator are only activated together.
+
+**Next hito: 3.94 — `OrderObservedClosed` contract** (ADR-012 D16 + C1–C5, already frozen and accepted). **Open decisions**: OQ1 — how an operator durably resolves an X that reads cannot resolve (director decision; required before activating recovery/gate); OQ2 — Postgres test environment and driver (required before the Writer hito). Neither blocks 3.94. Hito 3.92 remains the last accepted code hito.

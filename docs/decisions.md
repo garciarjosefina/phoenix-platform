@@ -1479,3 +1479,205 @@ La directora del proyecto resolvió **las dos decisiones** abiertas. Las alterna
 Se preservan íntegras las **12 familias de mutación** ya diseñadas arriba. Se añaden explícitamente, como casos obligatorios: **OPEN `new`**, **OPEN `partially_filled`**, **CLOSED `filled`**, **CLOSED `cancelled`**, **CLOSED `rejected`** — construidos desde los tipos remotos reales y proyectados. Y dos demostraciones simétricas: (i) que variar **sólo** `filled_quantity`, `filled_value`, `average_price`, `remote_status`, `exchange_order_id`, `remote_created_time_ms`, `remote_updated_time_ms`, `cancel_type`, `reject_reason` o `server_time_ms` **no altera** el resultado económico (siguen dando `MATCH`); (ii) que **cada una** de las seis dimensiones económicas, variada de forma aislada, **sí** produce `MISMATCH` con su divergencia específica.
 
 **Hito 3.90 — STOP RESUELTO por la directora el 2026-09-22 (Decisión 1: Opción B; Decisión 2: Opción A ahora, migración total a `Decimal` como destino futuro).** El diseño queda completo y congelado; **nada de esto se implementa en 3.90** — la implementación es el Hito 3.91, seguida del Hito 3.92. Cero producción, cero tests, suite 6600 sin cambio.
+
+---
+
+## ADR-015 — Write-Side Submission & Recovery Control-Flow: coordinador por encima de un puerto de submisión que preserva evidencia; cuenta bloqueada derivada del ledger; cero reenvío automático
+
+**Fecha:** 2026-09-28
+**Contexto:** Hito 3.93. Con 3.92 aceptado, todas las piezas puras del camino existen por separado: identidad (3.81), contratos de evento (3.83/3.89), lookups `history`/`realtime` (3.86/3.88), proyección a `ObservedOrderEconomics` y comparador (3.91), autoridad canónica `Decimal` y tripwire `reduce_only` (3.92). Falta congelar el control-flow que las une: `ExecutionRequest → Attempted durable → create-order remoto → Accepted/Rejected/Unknown/Duplicate → lookup → comparación → evento observado`. Diseño forense únicamente: cero producción, cero tests, sin Writer, sin Postgres, sin Bybit real. ADR-007…014 no se reescriben; los impactos se registran como precisiones prospectivas.
+
+### FACT — inventario real y evidencia verificada leyendo producción (no documentación)
+
+**F1 — Inventario de `platform/execution_gateway` por capa.**
+
+| Capa | Estado real |
+|---|---|
+| A. Contratos de dominio (`ExecutionRequest`/`ExecutionResult`) | EXISTE PRODUCTIVO (`float`, `order_id: str`) |
+| B. Puertos: `ExecutionGateway`; readers `OrderRealtimeLookupReader`/`OrderHistoryLookupReader` y los 5 del read-side | EXISTE PRODUCTIVO |
+| C. Adapter `BybitExecutionGateway` + stack HTTP/firma | EXISTE PRODUCTIVO (sin caller productivo, ADR-011 F7) |
+| D. Eventos del Ledger: 6 tipos implementados (`Attempted`, `OutcomeUnknown`, `Accepted`, `Rejected`, `ObservedOpen`, `IdentityReportedDuplicate`) | EXISTE SÓLO CONTRATO (ningún productor); **el 7º, `OrderObservedClosed`, NO EXISTE** (sólo diseñado, ADR-012 D16) |
+| E. Lookup `realtime` por `orderLinkId` | EXISTE PRODUCTIVO (3.88) |
+| F. Lookup `history` por `orderLinkId` | EXISTE PRODUCTIVO (3.86) |
+| G. Proyección a `ObservedOrderEconomics` | EXISTE PRODUCTIVO (3.91, pura) |
+| H. `EconomicComparator` | EXISTE PRODUCTIVO (3.91, puro) |
+| I. Identidad (`ExecutionAccountId`, `ExecutionOrderId` + generador, `ExchangeAccountIdentity`) | EXISTE PRODUCTIVO (sin Account Registry ni binding) |
+| J. Reconciliation V1 | EXISTE PRODUCTIVO (puro, no lee Ledger) |
+| K. `canonical_execution_decimal` | EXISTE PRODUCTIVO (3.92) |
+| L. Storage durable: Writer, Reader, `AppendReceipt`, `LedgerAppendError`, esquema, advisory lock | **NO EXISTE** (ni contrato) |
+| M. Orquestación productiva: wrapper/coordinador, recovery, gate/HALT de cuenta | **NO EXISTE** (`HALT` aparece sólo como prosa en un docstring de `bybit_order_history_lookup.py`) |
+
+**F2 — `execute()` actual, frontera por frontera.** `ExecutionRequest` (validación local sin `isinstance`) → `BybitExecutionGateway.execute()` → `_to_bybit_request()` (rechaza `len(order_id)>36`; `canonical_execution_decimal` para `quantity`/`price`; `reduce_only=False`; `time_in_force="GTC"`) → `BybitDemoClient.place_order()` → `BybitCreateOrderOperation.execute()` → payload builder (puro) → endpoint executor → firma → **`UrllibHttpTransport.post()` → `urllib.request.urlopen()` — único punto de efecto remoto, sin `try/except`** → parser → `BybitCreateOrderResponseInterpreter.interpret()` → `BybitCreateOrderResult(order_id, order_link_id)` → `_to_execution_result()` (verifica `order_link_id == order_id`). Excepciones que alcanzan `execute()`: familia `OSError` en crudo desde `urlopen` (`URLError`, `HTTPError`, `TimeoutError`, errores de socket), `BybitResponseProcessingError` (decodificación/esquema), `BybitApiError(ret_code, ret_msg)` (`ret_code != 0`). Clasificación: `ret_code ∈ {10001,110003,110004,110007}` → `ExecutionResult(status="rejected", error_message=ret_msg)`; cualquier otro `BybitApiError` (incluido `110072`) y todo `OSError`/`BybitResponseProcessingError` → `ExecutionInfrastructureError` de mensaje constante; `order_link_id` no coincidente tras ACK → `ExecutionInfrastructureError`.
+
+**F3 — HALLAZGO DECISIVO: el Port `ExecutionGateway` pierde información que los contratos de evento aceptados exigen.** Verificado por introspección de los dataclasses: `OrderAcceptedByExchange` exige `server_time_ms`; `OrderRejectedByExchange` exige `ret_code`, `ret_msg`, `server_time_ms`; `OrderIdentityReportedDuplicateByExchange` exige `ret_code`, `ret_msg`, `server_time_ms`. Pero `ExecutionResult` sólo porta `order_id`, `status`, `exchange_order_id`, `filled_quantity`, `average_price`, `error_message` — **ni `server_time_ms` ni `ret_code`**. Más abajo, `BybitCreateOrderResult` porta sólo `order_id`/`order_link_id` y `BybitApiError` sólo `ret_code`/`ret_msg`: el interpreter de create-order **descarta `BybitResponse.time_ms` tanto en aceptación como en rechazo** (ADR-011 F9 ya lo anticipaba: "que el futuro Writer lo lea del `BybitResponse` que hoy ya pasa por `BybitCreateOrderOperation`"). Consecuencia estructural: **un wrapper que sólo vea `ExecutionGateway.execute() → ExecutionResult` (ADR-011 D6 tal como está escrito) no puede construir `Accepted`, `Rejected` ni `Duplicate` sin fabricar `server_time_ms`** (usar el reloj local violaría ADR-010 D8) — e inspeccionar `__cause__` tampoco alcanza (`BybitApiError` no porta tiempo).
+
+**F4 — Transporte: sólo dos casos son definitivamente not-sent y el camino productivo no los tipifica** (ADR-011 F2 reconfirmado por lectura: `urlopen` sin captura). No existe hoy ningún error que permita **demostrar** que un create-order es seguro de reintentar.
+
+**F5 — ADR-011 D9 y ADR-013 F10/D13 describen un reintento de submisión con la misma X en el mismo proceso tras `Unknown`** ("el único camino legítimo hacia `110072`"). Ninguna ADR **exige** ese reintento; sólo exige que, si ocurre, reutilice X. La seguridad de ese reintento depende de la ventana y el alcance de unicidad de `orderLinkId`, **no documentados** (ADR-013 F2/OQ1, sin verificación empírica), y de la asincronía de la creación (ADR-013 F3).
+
+**F6 — ADR-011 D14 declara `UNIQUE (execution_account_id, execution_order_id, event_type)` sobre toda la tabla**, mientras ADR-011 D5 y ADR-012 C5 excluyen `OrderObservedOpen` del esquema porque se repite legítimamente. Aplicada literalmente, la DDL de D14 **prohibiría una segunda `ObservedOpen`** para la misma X — contradicción interna de ADR-011. Además, ADR-011 D5-C devuelve el receipt existente ante colisión **sin comparar contenido** para los tipos del write-side; ADR-012 C3 introdujo la comparación de contenido estable sólo para `ObservedClosed`.
+
+**F7 — No existe mecanismo de HALT ni de liberación.** ADR-011 D11 ordena que HALT "no se levanta automáticamente"; ninguna ADR define cómo se representa durablemente, ni cómo un operador declara resuelta una X irresoluble (p. ej. doble `NOT_FOUND` tras el horizonte, o un `Rejected` síncrono cuyo append falló — un create-order rechazado síncronamente normalmente no crea orden visible en read-side, ADR-012 D13). Con `REVOKE UPDATE, DELETE` (ADR-011 resolución STOP punto 4), tampoco existe vía manual legítima.
+
+**F8 — Entorno:** ni Postgres ni driver (`psycopg`/`psycopg2`) disponibles localmente; el Writer sería la primera dependencia de terceros (ADR-011 F5/resolución punto 5). `SystemMillisecondClock` existe y es reutilizable para `occurred_at_ms` (ADR-010 F5).
+
+**F9 — Binding cuenta ↔ credenciales inexistente.** Nada impide hoy que dos `ExecutionAccountId` distintas se cableen a las mismas credenciales Bybit — dos ledgers lógicos, dos locks, una sola cuenta remota.
+
+### DECISION
+
+**D1 — Invariantes normativos (3.93 no los cambia; fuente entre paréntesis).**
+I1 ningún create-order remoto sin `Attempted(X)` durable con `AppendReceipt` (ADR-011 D6) · I2 storage no disponible antes del `Attempted` ⇒ **sin orden** (ADR-011 D6/res. STOP 2) · I3 `ExecutionOrderId` es la identidad de correlación, `ord_`+32 hex, sin truncar (ADR-008/009) · I4 prohibido generar una X nueva para la misma intención mientras una X previa esté sin resolver (ADR-013 D6(2)); **3.93 lo generaliza a la cuenta** (D13) · I5 **cero reenvío automático** de create-order con X tras resultado ambiguo — ver D2 (esta ADR lo congela; ADR-011 D9 no lo exigía) · I6/I7 `110072` no es `Rejected` ni `Accepted` (ADR-013 D3/D4, reforzado en contrato 3.89) · I8 `110072` sólo prueba existencia de la identidad en el alcance de Bybit (ADR-013 D1) · I9 `NOT_FOUND` nunca autoriza reenvío ni identidad nueva (ADR-012 res. 5; ADR-013 D10) · I10 `history` es la fuente durable para CERRADAS (ADR-012 res. 1) · I11 `realtime` por X es la fuente REST de ABIERTAS; su negativo nunca es concluyente (ADR-013 D7) · I12 toda observación positiva se compara con `Attempted(X)` **antes** de appendear (ADR-013 D8; ADR-014 res. D1) · I13 `MISMATCH` ⇒ ningún append observado (ADR-013 D8) · I14 toda acción opera dentro de una única `ExecutionAccountId` (ADR-009, ADR-013 D11) · I15 economía de `Attempted` y del adapter comparten `canonical_execution_decimal` (ADR-014 res. D2, 3.92) · I16 `reduce_only=False` absoluto (3.92) · I17 nada de exactly-once fingido (ADR-011 D8/D9) · I18 un fallo de append post-remoto no borra el hecho de que la orden puede existir (ADR-011 D11) · I19 recovery tras restart **consulta, nunca reenvía** (ADR-011 D10) · I20 un `Unknown`/`Accepted` retroactivo está prohibido; la ventana de crash se representa por ausencia (ADR-012 D10; ADR-013 D12) · I21 hecho terminal absorbente (ADR-012 D9) · I22 ningún secreto ni cuerpo HTTP crudo en el Ledger (ADR-010 D14; ADR-011 D15).
+
+**D2 — V1: cero reenvío automático de create-order; la única vía de resolución es la lectura.** F4/F5: la seguridad de reintentar con X depende de propiedades de Bybit no documentadas ni verificadas; la resolución por lookup (I10/I11) no necesita reenvío. Por tanto el coordinador ejecuta **exactamente una** llamada remota por X, en toda la vida de X. ADR-011 D9 no se contradice (su regla "si se reintenta, misma X" sobrevive para cualquier decisión futura explícita); se **estrecha** su uso a cero en V1. Consecuencias: (a) un segundo `Unknown(X)` es imposible en V1 ⇒ la DEUDA FUTURA — WRITER de ADR-012 (colisión de `Unknown` repetido) **no aplica en V1** — sigue abierta para cualquier futura política de reintento, y reaparece si se introduce; (b) `110072` en V1 sólo puede llegar en la **primera** submisión de X (identidad ya usada por un bug, una colisión o un cliente externo) y se maneja defensivamente (D9).
+
+**D3 — Dueño de la orquestación: Opción B — `ExecutionSubmissionCoordinator` por encima de un PUERTO DE SUBMISIÓN NUEVO que preserva evidencia.** Alternativas evaluadas:
+*A — wrapper sobre `ExecutionGateway` (ADR-011 D6 literal):* separa bien responsabilidades y garantiza durable-before-network, pero es **infactible con los contratos aceptados** (F3): no puede construir `Accepted`/`Rejected`/`Duplicate`. Descartada por evidencia.
+*C — modificar `BybitExecutionGateway`:* acopla un adapter exchange-específico al Ledger (contra ADR-001 y el principio de ADR-011 D6: el invariante es exchange-agnóstico), rompe un componente aceptado y congelado. Descartada.
+*D — outbox/relay asíncrono:* descartada por ADR-011 D8 (Phoenix transmite síncronamente; separar transmisión crea la ventana de doble estado).
+*B — elegida:* se añade un puerto exchange-agnóstico nuevo, `OrderSubmissionPort.submit(request) -> OrderSubmissionOutcome`, cuyo resultado es una familia tipada derivada **1:1 de los payloads ya aceptados**, sin información nueva: `SubmissionAccepted(exchange_order_id, server_time_ms)`, `SubmissionRejected(ret_code, ret_msg, server_time_ms)`, `SubmissionIdentityDuplicate(ret_code, ret_msg, server_time_ms)`, `SubmissionOutcomeUnknown(reason ∈ {transport_failure, malformed_response, ambiguous_business_response, identity_mismatch})` — el conjunto cerrado ya aceptado en 3.83. Su adapter Bybit es **nuevo y hermano** de `BybitExecutionGateway` (que queda byte-idéntico): reutiliza payload builder, stack de firma/transporte, `canonical_execution_decimal`, `reduce_only=False`, `_ORDER_REJECTION_RET_CODES`, y **preserva `BybitResponse.time_ms`**; `110072` → `SubmissionIdentityDuplicate` (resuelve ADR-011 OQ4 / ADR-013 OQ3 por tipo, no por `__cause__`). Los errores de programación (`TypeError`, `KeyError`, …) siguen propagándose sin envolver (ADR-001A). El coordinador conserva la esencia de ADR-011 D6 — el invariante vive por encima del adapter, que no conoce el Ledger — pero sobre un puerto que sí porta la evidencia. Evaluación de B: responsabilidades separadas (coordinador = durabilidad y registro; puerto = transmisión y clasificación); durable-before-network estructural (el composition root sólo expone el coordinador); recovery en un servicio aparte (D11); exchange-agnóstico; testable con dobles del puerto y del Writer; compatible con todos los contratos aceptados (ninguno cambia).
+
+**D4 — Frontera durable.** `writer.append(execution_account_id, occurred_at_ms, OrderSubmissionAttempted(...))` debe devolver `AppendReceipt` **después** del commit PostgreSQL con `synchronous_commit=on` (ADR-011 D1 nivel F / res. STOP 1). Sólo entonces se llama `port.submit`. `LedgerAppendError` o cualquier excepción del append ⇒ **no** se llama al puerto (I2). Un Writer en memoria **no** es durable (ADR-011 D1 A-C prohibidas; res. STOP opción C descartada): sólo puede existir en `tests/`, nunca en `platform/` ni en el composition root.
+
+**D5 — Writer antes del orquestador.** El coordinador puede **desarrollarse** contra el Protocol `ExecutionLedgerWriter` con un doble de test, pero **no puede cablearse productivamente ni aceptarse como operativo** sin el `PostgresExecutionLedgerWriter` aceptado. Orden recomendado: Writer/Reader antes que coordinador y recovery (ver DAG, D22) — por arquitectura (I1/I2 exigen durabilidad real) y por riesgo histórico de que lo provisional persista (ADR-011 STOP opción C; D-014).
+
+**D6 — Máquina de estados conceptual de X vs. hechos durables.**
+
+| Estado conceptual | Hecho durable que lo evidencia | ¿Persistido como evento? |
+|---|---|---|
+| NEW (X asignada, sin Attempted) | ninguno | no (nada que registrar; ADR-010 D15) |
+| ATTEMPT_DURABLE | `Attempted(X)` | sí |
+| REMOTE_CALL_IN_FLIGHT | `Attempted(X)` sin resultado | no — se deriva por ausencia |
+| REMOTE_ACCEPTED_KNOWN | `Accepted(X)` | sí |
+| REMOTE_REJECTED_KNOWN | `Rejected(X)` | sí (terminal) |
+| REMOTE_OUTCOME_UNKNOWN | `Unknown(X, reason)` | sí |
+| DUPLICATE_REPORTED | `IdentityReportedDuplicate(X)` | sí (no terminal) |
+| OBSERVED_OPEN | `ObservedOpen(X)` | sí (snapshot) |
+| OBSERVED_CLOSED | `ObservedClosed(X)` | sí (terminal) — **contrato inexistente** |
+| INTEGRITY_MISMATCH | ninguno en el Ledger (ADR-013 D8) | no — registro de emergencia fuera del Ledger; re-derivable por relookup |
+| RECOVERY_REQUIRED / cuenta bloqueada | X con `Attempted` y sin hecho resolutorio | no — **derivado** (D13) |
+
+Hecho **resolutorio** de X: `Accepted`, `Rejected`, `ObservedOpen`, `ObservedClosed`. `Unknown` y `IdentityReportedDuplicate` **no** resuelven.
+
+**D7 — Happy path.** (1) Adquirir la *lease* exclusiva de la cuenta (D14). (2) Gate: si la cuenta tiene alguna X sin resolver o el Ledger no responde ⇒ rechazar sin orden (D13). (3) Validar que `request.order_id` es un `ExecutionOrderId` estricto y que **no existe** `Attempted` previo para esa X en esta cuenta (D16) — fallo ⇒ excepción local, sin orden, no ledger-worthy (ADR-010 D15). (4) Economía: `canonical_execution_decimal(quantity/price)`; `occurred_at_ms = clock.now_ms()`; `append(Attempted)` ⇒ `AppendReceipt`. (5) `port.submit(request)`. (6) `SubmissionAccepted` ⇒ `append(Accepted(X, exchange_order_id, server_time_ms))`. (7) Liberar lease; devolver aceptado. **Si el append de `Accepted` falla** tras la aceptación remota: reintento acotado y síncrono del mismo append (seguro por la clave de contenido, D16); si persiste ⇒ registro de emergencia estructurado (ADR-011 D11(2)) ⇒ la cuenta queda **bloqueada por derivación** (X tiene `Attempted` sin hecho resolutorio) ⇒ el coordinador **levanta** una excepción dedicada al caller (nunca éxito silencioso: el sistema está degradado) que prohíbe reenviar; la resolución la hace recovery observando X (será `ObservedOpen`/`ObservedClosed`, no un `Accepted` retroactivo — I20). Autoridad: el coordinador es dueño del append del resultado; recovery es dueño de la resolución posterior.
+
+**D8 — Rechazo explícito.** `SubmissionRejected` con `ret_code ∈ {10001,110003,110004,110007}` (nunca `110072`, que el contrato ya rechaza) ⇒ `append(Rejected(X, ret_code, ret_msg, server_time_ms))` ⇒ caller recibe rechazo de negocio. Append fallido ⇒ misma política que D7; X queda sin resolver y **probablemente irresoluble por lectura** (una orden rechazada síncronamente no suele aparecer en read-side) ⇒ requiere la resolución por operador (OQ1). Todo `ret_code` distinto de los cuatro y de `110072` ⇒ `Unknown(ambiguous_business_response)` (ADR-011 D7), **nunca** rechazo.
+
+**D9 — Ambigüedad y `110072`.** Toda excepción de transporte ⇒ `Unknown(transport_failure)`; respuesta no parseable ⇒ `Unknown(malformed_response)`; `orderLinkId` distinto tras ACK ⇒ `Unknown(identity_mismatch)` — fail-closed sin discriminar known-not-sent (ADR-011 D7; F4: no demostrable). **Ningún error actual permite reintento seguro ⇒ NO RETRY** (D2). Una excepción inesperada escapada del puerto tras iniciarse la llamada (defecto de programación) **no** produce `Unknown` (ninguna razón del conjunto cerrado la describe y fabricar una violaría ADR-010 D3): X queda `Attempted` sin resultado — la misma representación que un crash (I20) — y la excepción se propaga. `SubmissionIdentityDuplicate` ⇒ `append(IdentityReportedDuplicate(X, 110072, ret_msg, server_time_ms))` — **nunca** `Rejected` ni `Accepted` — y X queda sin resolver; el caller recibe una excepción "resultado desconocido, no reenviar". La resolución de X es trabajo del recovery (D10), que puede invocarse de inmediato bajo la misma lease o en el siguiente ciclo — la lógica es una sola.
+
+**D10 — Algoritmo de recovery para una X sin resolver** (bajo la lease de la cuenta; sólo lectura remota):
+1. `realtime` por X (fuente de abiertas; por 3.88 también puede devolver una fila cerrada reciente). `FoundOpen` ⇒ proyectar ⇒ comparar con `Attempted(X)` (paso 4). `FoundClosed` ⇒ proyectar ⇒ comparar (paso 4). `NotFound` ⇒ paso 2.
+2. `history` por X (fuente durable de cerradas). `Found` ⇒ proyectar ⇒ comparar. `NotFound` ⇒ paso 3.
+3. Ambos `NOT_FOUND` ⇒ X sigue **sin resolver**; nada se appendea (no existe hecho que registrar y no se inventa uno); se reintenta la lectura en ciclos posteriores bajo una policy acotada (intervalo y horizonte configurables, horizonte ≤ la retención mínima de 24 h de `history`, ADR-012 res. 6-7); vencido el horizonte ⇒ escalación a operador (registro de emergencia); la cuenta sigue bloqueada hasta la resolución por operador (OQ1). **Nunca** reenvío, **nunca** X nueva (I9).
+4. `MATCH` ⇒ `append(ObservedOpen(X,…))` o `append(ObservedClosed(X,…))` — el mapeo desde el tipo remoto es mecánico. `MISMATCH` ⇒ **ningún** append (I13); registro de emergencia `INTEGRITY_MISMATCH` con las divergencias tipadas; X sigue sin resolver ⇒ cuenta bloqueada ⇒ operador.
+5. Errores de lookup (`ExecutionInfrastructureError`: transporte, respuesta malformada, cardinalidad >1, cursor de paginación no vacío — todos ya fail-closed en 3.86/3.88) ⇒ **ningún** append, X sin resolver, reintento en el ciclo siguiente. `EconomicComparisonPreconditionError` (identidad cruzada) es un defecto de programación ⇒ se propaga.
+Orden `realtime → history`: ya congelado por ADR-013 D6(3); se reafirma porque `realtime` es la única fuente de abiertas y `history` cubre lo que la caché volátil de `realtime` pierda. La carrera "cerró entre consultas y `history` aún no lo refleja" (latencia documentada) termina en el paso 3 y se resuelve en un ciclo posterior.
+
+**D11 — Dueño de la política de mismatch.** El comparador **sólo informa** (3.91, congelado, sin tocar). `ExecutionRecoveryService` traduce `MISMATCH` en: ningún append + registro de emergencia. El bloqueo de cuenta **no** lo decide nadie en caliente: se deriva del Ledger (D13).
+
+**D12 — Fallos de append post-remoto (A–D).** En los cuatro casos: reintento acotado y síncrono del **mismo** append (seguro por D16); si persiste ⇒ registro de emergencia estructurado con `execution_account_id`, `execution_order_id` y la evidencia en memoria (sin secretos) ⇒ la cuenta queda bloqueada por derivación ⇒ excepción dedicada al caller. **Nunca**: reenviar create-order, generar X nueva, inventar un hecho sustituto, reportar éxito. *A — Accepted conocido:* recovery lo resolverá por observación. *B — Rejected conocido:* probablemente irresoluble por lectura ⇒ OQ1. *C — `110072` conocido:* recovery como D10; el `IdentityReportedDuplicate` perdido sólo resta evidencia de auditoría. *D — ambigüedad conocida (`Unknown` no durable):* equivalente a crash: `Attempted` sin resultado, recovery por lectura. Nada de esto es exactly-once (I17): es *a lo sumo una transmisión por X* + *registro de lo observable*.
+
+**D13 — HALT = cuenta bloqueada DERIVADA del Ledger, no un estado aparte.** No existe mecanismo hoy (F7); no se declara implementado. Definición: una cuenta está **bloqueada para nuevas submisiones** si y sólo si (a) existe alguna X con `Attempted` y sin hecho resolutorio (D6), o (b) el Ledger no responde. Por qué derivado y no persistido aparte: cubre por construcción todos los casos de ADR-011 D11 y ADR-013 D10 (append post-remoto fallido, `Unknown`, `110072`, mismatch, doble `NOT_FOUND`), sobrevive restarts sin tabla adicional, y "no se levanta automáticamente" se cumple porque sólo se levanta al appendear un hecho resolutorio **verificado** (ADR-011 D11(4)). Consecuencia deliberada: **mientras haya una X sin resolver, la cuenta no coloca ninguna orden nueva** (generaliza ADR-013 D6(2)/D10: la próxima intención podría duplicar económicamente a X, y Phoenix no puede saber si es "la misma intención"). A la escala de Phoenix el costo es aceptable. **Hueco real:** una X irresoluble por lectura (doble `NOT_FOUND` tras el horizonte; `Rejected` no persistido) bloquea la cuenta para siempre, porque no existe hecho durable con el que un operador declare su resolución y el Ledger es inmutable — OQ1, decisión de la directora requerida antes de activar recovery/gate.
+
+**D14 — Serialización por cuenta: el lock de append no alcanza; se requiere una lease de cuenta sobre toda la sección crítica.** El `pg_advisory_xact_lock` por cuenta (ADR-011 res. STOP 3) serializa cada append, pero **no** impide carreras entre pasos: gate-check → `Attempted` de dos submisiones; recovery de X intercalado con una submisión nueva; dos workers. Decisión: una **lease exclusiva por `ExecutionAccountId`** (lock advisory de sesión PostgreSQL sobre la misma clave, reentrante con el lock transaccional del append) que se mantiene desde el gate-check hasta el append del resultado, y que el recovery de esa cuenta también toma. Adquisición con timeout; no adquirida ⇒ sin orden (fail-closed). Caída de la conexión ⇒ la lease se libera sola; el Ledger ya refleja X sin resolver ⇒ gate bloqueado ⇒ recovery. Se mantiene una conexión durante la llamada remota: aceptable a la escala de Phoenix (órdenes por minuto, ADR-011 D12). **F9:** la lease es por `ExecutionAccountId`; si dos IDs apuntan a las mismas credenciales, la lease no protege — el composition root debe imponer una sola `ExecutionAccountId` por credencial, verificada contra `ExchangeAccountIdentity` antes de habilitar submisiones (prerrequisito: binding/Account Registry, D22).
+
+**D15 — `sequence`.** Garantiza únicamente orden de commit dentro de una cuenta (ADR-011 D4). **No** garantiza causalidad remota, ni orden real de ocurrencia en Bybit, ni exactly-once, ni verdad de reloj; nadie debe inferir de `sequence` que Bybit procesó X antes que Y.
+
+**D16 — Idempotencia del append: tres identidades distintas y una regla de colisión uniforme.** Identidad del evento (`event_id`, generada por el Writer) ≠ identidad económica (X; nunca se deduplica economía entre X distintas) ≠ identidad de reintento de append (la clave de contenido). Análisis de `UNIQUE(execution_account_id, execution_order_id, event_type)` por tipo: `Attempted` ✔ (una por X); `Accepted` ✔; `Rejected` ✔; `Unknown` ✔ **sólo porque V1 prohíbe reenvío** (D2 — con reenvío sería demasiado gruesa); `IdentityReportedDuplicate` ✔ (ADR-013 res. 3); `ObservedClosed` ✔ (ADR-012 C3-C5); **`ObservedOpen` ✘** — se repite legítimamente, y la DDL de ADR-011 D14 aplicada a toda la tabla lo prohibiría (F6). Precisiones prospectivas: (a) la restricción física es un **índice único parcial** que excluye `OrderObservedOpen`; (b) **regla de colisión uniforme para todo tipo con clave**: ante colisión, el Writer compara el *contenido estable* (todos los campos del payload salvo `server_time_ms`, metadato de observación — generalización directa de ADR-012 C2/C3): igual ⇒ devuelve el receipt existente (idempotente); distinto ⇒ error de integridad, fail-closed, nunca sobrescritura — un `Attempted(X)` con otra economía **no** puede colapsar en silencio sobre el primero; (c) `ObservedOpen`: bajo la lease de cuenta, se appendea sólo si su contenido estable difiere del último `ObservedOpen` de X — reintentos y re-observaciones idénticas son no-ops, un cambio real (p. ej. más `filled_quantity`) se registra; válido mientras el recovery sea su único productor (la futura integración Reconciliation → Ledger podrá refinarlo, ADR-010 OQ6); (d) el coordinador verifica **antes** del primer append que X no tiene `Attempted` (D7 paso 3): así un receipt idempotente sólo puede corresponder a su propio reintento, nunca a una reutilización de X que habilitaría un reenvío.
+
+**D17 — Tiempos por evento (sin rediseñar contratos).** `occurred_at_ms` (envelope) = `MillisecondClock.now_ms()` local en el instante de registrar el hecho: para `Attempted`, inmediatamente antes del append y siempre antes de la llamada remota; para REMOTE, al procesar la respuesta; para OBSERVED, al registrar la observación. `server_time_ms` (payload REMOTE/OBSERVED) = `BybitResponse.time_ms` de **esa** respuesta (create-order o GET) — requiere que el puerto de submisión lo preserve (D3). `committed_at_ms` = Writer (ADR-011 D2). `Unknown` no tiene tiempo remoto. La deuda de provenance de 3.78 (ADR-006) no bloquea esta frontera: el Ledger aporta la materia prima ordenada; la provenance de una Projection sigue siendo trabajo futuro.
+
+**D18 — Recovery tras restart, sin memoria RAM.** Al arrancar, y antes de abrir el gate de una cuenta, `ExecutionRecoveryService` adquiere la lease y ejecuta D10 para toda X sin resolver. Requiere consultas del Ledger que **no existen** (prerrequisito, D22): (q1) X sin hecho resolutorio en la cuenta, con presencia de `Unknown`/`IdentityReportedDuplicate`; (q2) el payload `Attempted(X)` (input del comparador); (q3) existencia de `Attempted(X)` (D7 paso 3); (q4) último `ObservedOpen(X)` (D16c). Todas son `SELECT` indexados por `(execution_account_id, execution_order_id)`.
+
+**D19 — Projection: no es dependencia del orquestador.** Las cuatro consultas de D18 bastan; ni el gate ni el recovery necesitan la Projection completa (ADR-011 D13). Se difiere sin bloquear nada.
+
+**D20 — Ataques de concurrencia.**
+
+| Caso | Mecanismo que impide la conducta insegura |
+|---|---|
+| C1 dos submisiones, misma cuenta, mismo X | lease de cuenta (D14) + pre-check de `Attempted(X)` (D16d) ⇒ la segunda se rechaza localmente |
+| C2 dos submisiones, misma cuenta, X distintos | lease serializa; la segunda ve el gate tras el resultado de la primera; si la primera quedó sin resolver ⇒ bloqueada (D13) |
+| C3 recovery de X + nueva submisión X | pre-check D16d (X ya tiene `Attempted`) |
+| C4 recovery de X + nueva submisión Y | lease; tras el recovery, gate bloqueado mientras X siga sin resolver |
+| C5 crash tras `Attempted` durable, antes de la red | X sin resultado ⇒ gate bloqueado ⇒ recovery lee (probablemente doble `NOT_FOUND` ⇒ horizonte ⇒ OQ1); **nunca** reenvío (no demostrable que no salió, F4) |
+| C6 crash durante la red | ídem C5; puede haber orden remota ⇒ recovery la observa |
+| C7 crash tras Accepted remoto, antes del append | X sin resultado ⇒ recovery ⇒ `ObservedOpen`/`ObservedClosed` (nunca `Accepted` retroactivo) |
+| C8 DB cae tras la respuesta remota | D12; lease liberada por caída de conexión; gate fail-closed mientras la DB no responda |
+| C9 `110072` con recovery previo activo | lease: un solo actor por cuenta; `IdentityReportedDuplicate` idempotente por clave |
+| C10 dos workers Railway, misma cuenta | lease de sesión PostgreSQL (no local al proceso) ⇒ exclusión real entre procesos; con la condición de binding único cuenta↔credenciales (D14/F9) |
+
+**D21 — Matrices.**
+
+*Crash matrix (restart posterior):*
+
+| Punto de crash | Hecho durable | Estado remoto posible | Acción al restart | ¿Reenvío seguro? |
+|---|---|---|---|---|
+| T0 tras asignar X, antes del append | ninguno | nada | nada que resolver; X nunca se usó | la intención puede re-emitirse con **otra** X por su dueño — no es reenvío: nada salió |
+| T1 durante el append de `Attempted` | quizá `Attempted` (commit incierto) | nada (la red no empezó) | si existe `Attempted` ⇒ tratar como T2 | **NO** (desde el Ledger T1 y T2 son indistinguibles) |
+| T2 `Attempted` durable, antes de la red | `Attempted` | nada | recovery lectura ⇒ doble `NOT_FOUND` ⇒ horizonte ⇒ OQ1 | **NO** (indistinguible de T3-T5) |
+| T3 durante el envío | `Attempted` | nada / orden creada | recovery lectura | **NO** |
+| T4 Bybit procesó, respuesta en vuelo | `Attempted` | creada / rechazada | recovery lectura | **NO** |
+| T5 respuesta recibida, antes del append del resultado | `Attempted` | creada / rechazada / duplicada | recovery lectura (rechazada ⇒ probablemente irresoluble ⇒ OQ1) | **NO** |
+| T6 resultado durable | `Attempted` + resultado | según resultado | `Accepted`/`Rejected`: resuelta; `Unknown`/`Duplicate`: recovery | **NO** |
+| T7 lookup hecho, antes del append observado | igual que antes | abierta / cerrada | recovery repite lectura (idempotente) | **NO** |
+| T8 observación durable | + `ObservedOpen`/`ObservedClosed` | abierta / cerrada | resuelta; cuenta desbloqueada si no quedan otras X | n/a |
+
+La columna es **NO** en todos los puntos con `Attempted`: ningún estado del Ledger permite demostrar que la orden no salió (F4). T0 no es un reenvío (no existe hecho de X).
+
+*Failure matrix:*
+
+| Falla | Append | Cuenta bloqueada | Recovery | Resultado al caller | ¿Nuevas submisiones? |
+|---|---|---|---|---|---|
+| DB no disponible antes del `Attempted` | ninguno | sí (gate fail-closed) | no aplica | error "sin orden" | no, hasta que la DB responda |
+| Timeout / error de transporte | `Unknown(transport_failure)` | sí | lectura D10 | error "resultado desconocido, no reenviar" | no, hasta resolver X |
+| Respuesta malformada | `Unknown(malformed_response)` | sí | D10 | ídem | no |
+| `ret_code` no clasificado | `Unknown(ambiguous_business_response)` | sí | D10 | ídem | no |
+| `orderLinkId` no coincidente | `Unknown(identity_mismatch)` | sí | D10 | ídem | no |
+| Rechazo explícito (4 códigos) | `Rejected` | no | no | rechazo de negocio | sí |
+| `110072` | `IdentityReportedDuplicate` | sí | D10 | error "resultado desconocido, no reenviar" | no |
+| Error de lookup `history`/`realtime` | ninguno | sigue | reintento en ciclo siguiente | — | no |
+| Mismatch económico | ninguno (emergencia fuera del Ledger) | sí | se re-deriva en cada ciclo; operador | — | no, hasta resolución por operador (OQ1) |
+| DB falla post-remoto | reintento acotado ⇒ emergencia | sí | D10 tras recuperar la DB | error degradado, no reenviar | no |
+
+**D22 — Componentes (responsabilidad única cada uno; sin God Object).** `ExecutionLedgerWriter` (Protocol) / `PostgresExecutionLedgerWriter`: append durable, `event_id`, `sequence`, índices y regla de colisión D16, `REVOKE UPDATE, DELETE`. `ExecutionLedgerReader` (Protocol) / impl Postgres: las consultas q1-q4 (D18). `AccountExecutionLease` (Postgres, lock de sesión por cuenta, D14). `OrderSubmissionPort` (Protocol) + contratos `OrderSubmissionOutcome` + `BybitOrderSubmissionAdapter` (D3). `AccountSubmissionGate`: política pura sobre el Reader (D13). `ExecutionSubmissionCoordinator`: D7-D9, D12 — sin lógica de lookup. `ExecutionRecoveryService`: D10-D11 — sin llamadas de create-order. Sumidero de evidencia de emergencia (stderr estructurado, sin secretos). **DAG de implementación:**
+```
+Nivel 0 (contratos puros, en paralelo):
+  [a] OrderObservedClosed (ADR-012 D16 + C2/C3)
+  [b] OrderSubmissionPort + OrderSubmissionOutcome
+  [c] Protocols Writer/Reader/Lease + AppendReceipt + LedgerAppendError + error de integridad
+  [d] OQ1 (decisión de la directora: resolución por operador)   [e] OQ2 (entorno Postgres + driver)
+Nivel 1:  [f] BybitOrderSubmissionAdapter (← b)      [g] Postgres Writer/Reader/Lease (← a, c, e)
+Nivel 2:  [h] AccountSubmissionGate (← c, g)
+Nivel 3:  [i] ExecutionRecoveryService (← a, g, h; lookups/proyección/comparador ya existen)
+          [j] ExecutionSubmissionCoordinator (← f, g, h)
+Nivel 4:  [k] composition root + binding cuenta↔credenciales (F9) + activación (← i, j, d)
+```
+[i] y [j] pueden implementarse en paralelo, pero **ninguno se activa sin el otro**: sin recovery, el primer `Unknown` bloquea la cuenta para siempre; sin coordinador no hay nada que recuperar. [k] exige [d] resuelto.
+
+**D23 — Próximo hito: Hito 3.94 — implementación del contrato `OrderObservedClosed` ([a]).** Justificación: es el prerrequisito más pequeño y más auditable; su especificación ya está congelada y aceptada tras reauditoría (ADR-012 D16 + corrección C1-C5), sin ninguna decisión nueva; es puro (sin I/O, sin dependencias, sin entorno); **no puede habilitar ninguna ejecución remota**; y lo exigen tanto el recovery (el caso más peligroso: MARKET llenada con respuesta perdida, ADR-012 D14a) como las pruebas de la regla de colisión de contenido del Writer. Los otros candidatos quedan detrás por razones concretas: el Writer Postgres depende de OQ2 (no hay Postgres ni driver, F8) y es la primera dependencia externa; el Reader depende del Writer; el gate depende del Reader; [b] es viable en paralelo y puede ser el hito siguiente.
+
+### NOT IMPLEMENTED
+
+Nada: ni `OrderObservedClosed`, ni el puerto de submisión, ni su adapter, ni Writer/Reader/Lease, ni gate, ni coordinador, ni recovery, ni resolución por operador, ni binding de cuenta, ni dependencia nueva. `platform/` y `tests/` byte-idénticos. ADR-007…014 sin modificar.
+
+### IMPACTO EN ADR-011 / ADR-012 / ADR-013 (prospectivo, sin reescribir historia)
+
+- **ADR-011 D6:** el wrapper sobre `ExecutionGateway` es infactible con los contratos aceptados (F3); el invariante se mantiene, reubicado en el coordinador sobre `OrderSubmissionPort` (D3). `BybitExecutionGateway` sigue byte-idéntico.
+- **ADR-011 D9:** V1 fija cero reenvío automático (D2); la regla "si se reintenta, misma X" sobrevive para el futuro.
+- **ADR-011 D11:** HALTED se materializa como bloqueo derivado del Ledger (D13) y se extiende a toda X sin resolver.
+- **ADR-011 D12:** el escritor único por cuenta se amplía a una lease sobre toda la sección crítica (D14).
+- **ADR-011 D5/D14:** índice único parcial sin `ObservedOpen`; regla de colisión de contenido estable para todo tipo con clave (D16).
+- **ADR-011 OQ4 / ADR-013 OQ3:** `110072` se distingue por tipo en el puerto de submisión, no por `__cause__` (D3).
+- **ADR-012 DEUDA FUTURA — WRITER:** no aplica en V1 (D2a); reaparece con cualquier política de reintento.
+- **ADR-013 D6/D13:** los escenarios con "retry(X) → `110072`" dejan de ser el camino previsto en V1; `110072` se trata defensivamente en la primera submisión (D2b). El orden `realtime → history` y la verificación económica se mantienen.
+
+### OPEN QUESTIONS
+
+**OQ1 — BLOQUEANTE para activar recovery/gate ([k]); decisión de la directora requerida.** ¿Cómo se representa durablemente que un operador resolvió una X irresoluble por lectura (doble `NOT_FOUND` tras el horizonte; `Rejected` no persistido)? Sin ese hecho, D13 bloquea la cuenta para siempre y el Ledger inmutable no deja vía manual legítima. Requiere definir autoridad (un hecho LOCAL declarado por un humano es una autoridad nueva), payload, qué puede afirmar ("no hay evidencia remota de X") y qué no ("X nunca existió"). **No bloquea 3.94** ni los hitos de contratos/Writer.
+**OQ2 — BLOQUEANTE para el hito del Writer.** Entorno de pruebas PostgreSQL (servicio local, contenedor o instancia de test) y el driver concreto (`psycopg` 3 candidato, ADR-011 res. STOP 5 — pure-Python vs. binario frente al build de Railpack, D-014). Decisión de entorno/infra; no bloquea 3.94.
+**OQ3 — Parámetros operativos:** reintentos del append post-remoto, timeout de la lease, intervalo y horizonte de relectura en recovery (≤ 24 h, ADR-012 res. 7), formato del registro de emergencia. Del hito que implemente cada componente.
+**OQ4 — Verificación empírica de la ventana/alcance de unicidad de `orderLinkId`** (ADR-013 OQ1) — sigue sin datos; sólo sería relevante si alguna vez se reconsidera D2.
+**OQ5 — API pública del coordinador frente a callers:** si satisface el Protocol `ExecutionGateway` (devolviendo `ExecutionResult` en accepted/rejected y excepciones tipadas para desconocido/bloqueado/sin-orden) o expone una API propia. Ergonomía del hito [j], no arquitectura.
+
+**Archivos de producción modificados:** ninguno. **Tests:** ninguno. **Suite:** 6936 passing, sin cambio.
+**Sin conexión real con Bybit; sin Railway; sin Postgres; sin Writer; sin recovery; sin Projection; sin Repair.**
+**Hito 3.93 — DISEÑADO.** Próximo hito: **3.94 — contrato `OrderObservedClosed`**. OQ1 (resolución por operador) y OQ2 (entorno Postgres) quedan registradas como decisiones requeridas antes de sus hitos respectivos; ninguna bloquea 3.94.
