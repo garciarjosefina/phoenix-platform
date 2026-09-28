@@ -17,6 +17,7 @@ from execution_gateway.execution_ledger_event_contracts import (
     ObservedFact,
     OrderAcceptedByExchange,
     OrderIdentityReportedDuplicateByExchange,
+    OrderObservedClosed,
     OrderObservedOpen,
     OrderRejectedByExchange,
     OrderSubmissionAttempted,
@@ -76,6 +77,22 @@ def _duplicate(**overrides):
     )
     defaults.update(overrides)
     return OrderIdentityReportedDuplicateByExchange(**defaults)
+
+
+def _observed_closed(**overrides):
+    # Fixture "Filled" -- derivada del acceptance case principal de
+    # ADR-012 D14a (MARKET, ACK perdido, llenada). Los demás casos
+    # (Cancelled zero-fill, Cancelled parcial, Rejected) se construyen
+    # en TestOrderObservedClosed a partir de este mismo default.
+    defaults = dict(
+        execution_order_id=_ORDER_ID, exchange_order_id="BYBIT-1", symbol="BTCUSDT",
+        side="buy", order_type="limit", quantity=Decimal("1"), filled_quantity=Decimal("1"),
+        filled_value=Decimal("100"), remote_status="filled", reduce_only=False,
+        server_time_ms=1000, remote_created_time_ms=900, remote_updated_time_ms=950,
+        price=Decimal("100"), average_price=Decimal("100"),
+    )
+    defaults.update(overrides)
+    return OrderObservedClosed(**defaults)
 
 
 def _envelope(*, payload, event_id="evt-1", account=_ACCOUNT, occurred_at_ms=1000):
@@ -592,14 +609,15 @@ class TestOrderObservedOpen:
             if isinstance(obj, type) and issubclass(obj, ExecutionLedgerEventPayload)
         }
         assert "UnattributedOrderObservedOpen" not in event_type_names
-        # Exactamente 6 tipos concretos (5 de ADR-010/Hito 3.83 + el
-        # séptimo tipo de ADR-013/Hito 3.89, OrderIdentityReportedDuplicate
-        # ByExchange) + el marcador base + los 3 marcadores de autoridad =
-        # 10; ninguno adicional para huérfanas.
+        # Exactamente 7 tipos concretos (5 de ADR-010/Hito 3.83 + el séptimo
+        # tipo de ADR-013/Hito 3.89, OrderIdentityReportedDuplicateByExchange
+        # + el octavo tipo de ADR-012/Hito 3.94, OrderObservedClosed) + el
+        # marcador base + los 3 marcadores de autoridad = 11; ninguno
+        # adicional para huérfanas.
         concrete_event_types = event_type_names - {
             "ExecutionLedgerEventPayload", "LocalFact", "RemoteFact", "ObservedFact",
         }
-        assert len(concrete_event_types) == 6
+        assert len(concrete_event_types) == 7
 
     def test_status_validated(self):
         with pytest.raises(ValueError):
@@ -624,6 +642,427 @@ class TestOrderObservedOpen:
 
 
 # ---------------------------------------------------------------------------
+# OrderObservedClosed (Hito 3.94, ADR-012 D16 + corrección post-3.85,
+# reafirmado sin cambios por ADR-015). Octavo tipo de evento, OBSERVED,
+# terminal y absorbente. Mecánicamente equivalente en field set e
+# invariantes a BybitOrderHistoryOrderFound (Hito 3.86) -- los nombres de
+# test que siguen replican deliberadamente los de
+# test_execution_gateway_order_history_lookup_contracts.py para dejar la
+# correspondencia mecánica auditable, no por coincidencia.
+# ---------------------------------------------------------------------------
+
+class TestOrderObservedClosedConstruction:
+    def test_is_frozen(self):
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            _observed_closed().remote_status = "cancelled"
+
+    def test_is_observed_fact(self):
+        ev = _observed_closed()
+        assert isinstance(ev, ObservedFact)
+        assert not isinstance(ev, RemoteFact)
+        assert not isinstance(ev, LocalFact)
+
+    def test_not_convertible_to_accepted_or_rejected(self):
+        assert type(_observed_closed()) is not OrderAcceptedByExchange
+        assert type(_observed_closed()) is not OrderRejectedByExchange
+
+    # A. valid Filled
+    def test_valid_filled(self):
+        ev = _observed_closed(
+            remote_status="filled", quantity=Decimal("1"), filled_quantity=Decimal("1"),
+            filled_value=Decimal("100"), average_price=Decimal("100"),
+        )
+        assert ev.remote_status == "filled"
+        assert ev.filled_quantity == ev.quantity
+
+    # B. valid Cancelled zero-fill
+    def test_valid_cancelled_zero_fill(self):
+        ev = _observed_closed(
+            remote_status="cancelled", quantity=Decimal("1"), filled_quantity=Decimal("0"),
+            filled_value=Decimal("0"), average_price=None, cancel_type="CancelByUser",
+        )
+        assert ev.remote_status == "cancelled"
+        assert ev.filled_quantity == Decimal("0")
+
+    # C. valid Cancelled partial-fill
+    def test_valid_cancelled_partial_fill(self):
+        ev = _observed_closed(
+            remote_status="cancelled", quantity=Decimal("1"), filled_quantity=Decimal("0.4"),
+            filled_value=Decimal("40"), average_price=Decimal("100"), cancel_type="CancelByUser",
+        )
+        assert ev.filled_quantity == Decimal("0.4")
+        assert ev.filled_quantity < ev.quantity
+
+    # D. valid Rejected
+    def test_valid_rejected(self):
+        ev = _observed_closed(
+            remote_status="rejected", quantity=Decimal("1"), filled_quantity=Decimal("0"),
+            filled_value=Decimal("0"), average_price=None, reject_reason="EC_InsufficientBalance",
+        )
+        assert ev.remote_status == "rejected"
+        assert ev.filled_quantity == Decimal("0")
+
+    # E. MARKET closed
+    def test_market_closed(self):
+        ev = _observed_closed(order_type="market", price=None)
+        assert ev.price is None
+
+    # F. LIMIT closed
+    def test_limit_closed(self):
+        ev = _observed_closed(order_type="limit", price=Decimal("100"))
+        assert ev.price == Decimal("100")
+
+    def test_preserves_ids(self):
+        ev = _observed_closed(exchange_order_id="BYBIT-9")
+        assert ev.execution_order_id == _ORDER_ID
+        assert ev.exchange_order_id == "BYBIT-9"
+
+    def test_execution_order_id_preserved_by_identity(self):
+        marker = ExecutionOrderId(value="ord_" + "d" * 32)
+        ev = _observed_closed(execution_order_id=marker)
+        assert ev.execution_order_id is marker
+
+    def test_execution_order_id_is_mandatory(self):
+        with pytest.raises(TypeError):
+            _observed_closed(execution_order_id=None)
+
+    def test_execution_order_id_rejects_a_bare_string_not_the_value_object(self):
+        with pytest.raises(TypeError):
+            _observed_closed(execution_order_id="ord_" + "a" * 32)
+
+    def test_exchange_order_id_never_used_as_fallback_for_execution_order_id(self):
+        kwargs = dict(
+            exchange_order_id="BYBIT-9", symbol="BTCUSDT", side="buy", order_type="limit",
+            quantity=Decimal("1"), filled_quantity=Decimal("1"), filled_value=Decimal("100"),
+            remote_status="filled", reduce_only=False, server_time_ms=1000,
+            remote_created_time_ms=900, remote_updated_time_ms=950, price=Decimal("100"),
+            average_price=Decimal("100"),
+        )
+        with pytest.raises(TypeError):
+            OrderObservedClosed(**kwargs)
+
+    def test_exchange_order_id_must_not_be_empty(self):
+        with pytest.raises(ValueError):
+            _observed_closed(exchange_order_id="")
+
+    def test_exchange_order_id_must_be_str(self):
+        with pytest.raises(TypeError):
+            _observed_closed(exchange_order_id=123)
+
+    def test_no_forbidden_attributes_on_real_instance(self):
+        # Mismo patrón que el N21 de Hito 3.89 (hasattr sobre instancia
+        # real, no dataclasses.fields sobre la clase) -- confirma que
+        # ningún campo de orquestación/envelope/credenciales se cuela
+        # silenciosamente en este contrato puro.
+        ev = _observed_closed()
+        for forbidden in (
+            "bot_id", "execution_bot_id", "account_id", "execution_account_id",
+            "authority", "sequence", "occurred_at_ms", "committed_at_ms", "event_id",
+            "api_key", "api_secret", "credential", "headers", "raw_response",
+            "terminal", "is_terminal", "leaves_qty", "cum_exec_fee",
+        ):
+            assert not hasattr(ev, forbidden), forbidden
+
+
+class TestOrderObservedClosedTypeAttacks:
+    @pytest.mark.parametrize("bad", [None, "1", True, 1.5, [], {}, b"x", object()])
+    def test_execution_order_id_rejects_non_value_object(self, bad):
+        with pytest.raises(TypeError):
+            _observed_closed(execution_order_id=bad)
+
+    @pytest.mark.parametrize("field", ["quantity", "filled_quantity", "filled_value"])
+    @pytest.mark.parametrize("bad", [None, "1", True, 1.5, [], {}, object()])
+    def test_decimal_fields_reject_non_decimal(self, field, bad):
+        with pytest.raises(TypeError):
+            _observed_closed(**{field: bad})
+
+    @pytest.mark.parametrize("field", ["quantity", "filled_quantity", "filled_value"])
+    def test_decimal_fields_reject_infinity(self, field):
+        with pytest.raises(ValueError):
+            _observed_closed(**{field: Decimal("Infinity")})
+
+    def test_price_rejects_non_decimal_when_present(self):
+        with pytest.raises(TypeError):
+            _observed_closed(price=100.0)
+
+    def test_average_price_rejects_non_decimal_when_present(self):
+        with pytest.raises(TypeError):
+            _observed_closed(average_price=100.0)
+
+    @pytest.mark.parametrize("bad", [None, "false", 1, 0, 1.0, []])
+    def test_reduce_only_rejects_non_bool(self, bad):
+        with pytest.raises(TypeError):
+            _observed_closed(reduce_only=bad)
+
+    @pytest.mark.parametrize("field", [
+        "server_time_ms", "remote_created_time_ms", "remote_updated_time_ms",
+    ])
+    @pytest.mark.parametrize("bad", [None, "1000", 1.5, [], {}, object()])
+    def test_timestamp_fields_reject_non_int(self, field, bad):
+        with pytest.raises(TypeError):
+            _observed_closed(**{field: bad})
+
+    @pytest.mark.parametrize("field", [
+        "server_time_ms", "remote_created_time_ms", "remote_updated_time_ms",
+    ])
+    def test_timestamp_fields_reject_bool(self, field):
+        # bool es subclase de int -- True/False no deben colarse como
+        # timestamp válido (mismo patrón que el resto del archivo).
+        with pytest.raises(TypeError):
+            _observed_closed(**{field: True})
+
+    @pytest.mark.parametrize("field", [
+        "server_time_ms", "remote_created_time_ms", "remote_updated_time_ms",
+    ])
+    def test_timestamp_fields_reject_negative(self, field):
+        with pytest.raises(ValueError):
+            _observed_closed(**{field: -1})
+
+    def test_remote_status_rejects_non_str(self):
+        with pytest.raises(TypeError):
+            _observed_closed(remote_status=1)
+
+    def test_symbol_rejects_non_str(self):
+        with pytest.raises(TypeError):
+            _observed_closed(symbol=None)
+
+    def test_cancel_type_rejects_non_str_when_present(self):
+        with pytest.raises(TypeError):
+            _observed_closed(remote_status="cancelled", cancel_type=1, filled_quantity=Decimal("0"),
+                              filled_value=Decimal("0"), average_price=None)
+
+    def test_reject_reason_rejects_non_str_when_present(self):
+        with pytest.raises(TypeError):
+            _observed_closed(reject_reason=1)
+
+
+class TestOrderObservedClosedRemoteStatus:
+    def test_rejects_open_status(self):
+        with pytest.raises(ValueError):
+            _observed_closed(remote_status="new")
+
+    def test_rejects_impossible_closed_status_deactivated(self):
+        with pytest.raises(ValueError):
+            _observed_closed(remote_status="deactivated")
+
+    def test_rejects_impossible_closed_status_partially_filled_cancelled(self):
+        with pytest.raises(ValueError):
+            _observed_closed(remote_status="partially_filled_cancelled")
+
+    def test_rejects_empty_string(self):
+        with pytest.raises(ValueError):
+            _observed_closed(remote_status="")
+
+    def test_accepts_filled(self):
+        assert _observed_closed(
+            remote_status="filled", filled_quantity=Decimal("1"), quantity=Decimal("1"),
+            filled_value=Decimal("100"), average_price=Decimal("100"),
+        ).remote_status == "filled"
+
+    def test_accepts_cancelled(self):
+        assert _observed_closed(
+            remote_status="cancelled", filled_quantity=Decimal("0"), quantity=Decimal("1"),
+            filled_value=Decimal("0"), average_price=None,
+        ).remote_status == "cancelled"
+
+    def test_accepts_rejected(self):
+        assert _observed_closed(
+            remote_status="rejected", filled_quantity=Decimal("0"), quantity=Decimal("1"),
+            filled_value=Decimal("0"), average_price=None,
+        ).remote_status == "rejected"
+
+
+class TestOrderObservedClosedCrossFieldInvariants:
+    def test_filled_requires_full_fill(self):
+        with pytest.raises(ValueError):
+            _observed_closed(
+                remote_status="filled", quantity=Decimal("1"), filled_quantity=Decimal("0.9"),
+            )
+
+    def test_rejected_requires_zero_fill(self):
+        with pytest.raises(ValueError):
+            _observed_closed(
+                remote_status="rejected", quantity=Decimal("1"), filled_quantity=Decimal("0.1"),
+                filled_value=Decimal("10"), average_price=Decimal("100"),
+            )
+
+    def test_cancelled_requires_partial_fill_strictly_below_quantity(self):
+        with pytest.raises(ValueError):
+            _observed_closed(
+                remote_status="cancelled", quantity=Decimal("1"), filled_quantity=Decimal("1"),
+                filled_value=Decimal("100"), average_price=Decimal("100"),
+            )
+
+    def test_average_price_none_requires_zero_fill(self):
+        with pytest.raises(ValueError):
+            _observed_closed(
+                remote_status="cancelled", quantity=Decimal("1"), filled_quantity=Decimal("0.4"),
+                filled_value=Decimal("40"), average_price=None,
+            )
+
+    def test_average_price_present_requires_nonzero_fill(self):
+        with pytest.raises(ValueError):
+            _observed_closed(
+                remote_status="cancelled", quantity=Decimal("1"), filled_quantity=Decimal("0"),
+                filled_value=Decimal("0"), average_price=Decimal("100"),
+            )
+
+    def test_average_price_must_be_positive_when_present(self):
+        with pytest.raises(ValueError):
+            _observed_closed(average_price=Decimal("0"))
+
+    def test_filled_value_zero_iff_filled_quantity_zero_direction_a(self):
+        # filled_value > 0 con filled_quantity == 0
+        with pytest.raises(ValueError):
+            _observed_closed(
+                remote_status="rejected", quantity=Decimal("1"), filled_quantity=Decimal("0"),
+                filled_value=Decimal("10"), average_price=None,
+            )
+
+    def test_filled_value_zero_iff_filled_quantity_zero_direction_b(self):
+        # filled_value == 0 con filled_quantity > 0
+        with pytest.raises(ValueError):
+            _observed_closed(
+                remote_status="cancelled", quantity=Decimal("1"), filled_quantity=Decimal("0.4"),
+                filled_value=Decimal("0"), average_price=Decimal("100"),
+            )
+
+    def test_filled_quantity_cannot_exceed_quantity(self):
+        with pytest.raises(ValueError):
+            _observed_closed(
+                remote_status="filled", quantity=Decimal("1"), filled_quantity=Decimal("1.1"),
+                filled_value=Decimal("110"), average_price=Decimal("100"),
+            )
+
+
+class TestOrderObservedClosedOrderTypePriceCoupling:
+    def test_limit_requires_price(self):
+        with pytest.raises(ValueError):
+            _observed_closed(order_type="limit", price=None)
+
+    def test_market_forbids_price(self):
+        with pytest.raises(ValueError):
+            _observed_closed(order_type="market", price=Decimal("100"))
+
+    def test_limit_with_price_is_valid(self):
+        assert _observed_closed(order_type="limit", price=Decimal("100")).price == Decimal("100")
+
+
+class TestOrderObservedClosedCancelAndRejectReason:
+    def test_cancel_type_must_be_none_unless_cancelled(self):
+        with pytest.raises(ValueError):
+            _observed_closed(remote_status="filled", cancel_type="CancelByUser")
+
+    def test_cancel_type_allowed_when_cancelled(self):
+        ev = _observed_closed(
+            remote_status="cancelled", quantity=Decimal("1"), filled_quantity=Decimal("0"),
+            filled_value=Decimal("0"), average_price=None, cancel_type="CancelByUser",
+        )
+        assert ev.cancel_type == "CancelByUser"
+
+    def test_cancel_type_rejects_empty_string(self):
+        with pytest.raises(ValueError):
+            _observed_closed(
+                remote_status="cancelled", quantity=Decimal("1"), filled_quantity=Decimal("0"),
+                filled_value=Decimal("0"), average_price=None, cancel_type="",
+            )
+
+    def test_reject_reason_preserved_verbatim(self):
+        ev = _observed_closed(
+            remote_status="rejected", quantity=Decimal("1"), filled_quantity=Decimal("0"),
+            filled_value=Decimal("0"), average_price=None, reject_reason="EC_InsufficientBalance",
+        )
+        assert ev.reject_reason == "EC_InsufficientBalance"
+
+    def test_reject_reason_not_coupled_to_remote_status(self):
+        # ADR-012 D8: reject_reason NO está acoplado estrictamente a
+        # remote_status -- la propia taxonomía de Bybit lo usa también en
+        # cancelaciones (p. ej. EC_CancelByOrderValueZero).
+        ev = _observed_closed(
+            remote_status="cancelled", quantity=Decimal("1"), filled_quantity=Decimal("0"),
+            filled_value=Decimal("0"), average_price=None, cancel_type="CancelByUser",
+            reject_reason="EC_CancelByOrderValueZero",
+        )
+        assert ev.reject_reason == "EC_CancelByOrderValueZero"
+
+    def test_reject_reason_rejects_empty_string(self):
+        with pytest.raises(ValueError):
+            _observed_closed(reject_reason="")
+
+
+class TestOrderObservedClosedTimestamps:
+    def test_updated_must_not_precede_created(self):
+        with pytest.raises(ValueError):
+            _observed_closed(remote_created_time_ms=1000, remote_updated_time_ms=999)
+
+    def test_equal_created_and_updated_is_valid(self):
+        ev = _observed_closed(remote_created_time_ms=1000, remote_updated_time_ms=1000)
+        assert ev.remote_created_time_ms == ev.remote_updated_time_ms == 1000
+
+    def test_server_time_ms_is_independent_of_remote_timestamps(self):
+        # server_time_ms describe ESTA consulta, no la orden -- puede ser
+        # anterior, igual o posterior a los timestamps remotos sin que
+        # ninguna invariante lo relacione con ellos.
+        ev = _observed_closed(
+            remote_created_time_ms=1000, remote_updated_time_ms=1000, server_time_ms=50,
+        )
+        assert ev.server_time_ms == 50
+
+
+# ---------------------------------------------------------------------------
+# Partición de contenido estable vs. metadato de observación (ADR-012,
+# "Corrección post-reauditoría de D12"). Fija declarativamente, del lado
+# del test, la partición 16+1 que el futuro Writer usará para idempotencia
+# -- protege contra reabrir accidentalmente el defecto de la reauditoría
+# de Hito 3.85 (D12 original no distinguía server_time_ms del resto).
+# ---------------------------------------------------------------------------
+
+_OBSERVED_CLOSED_STABLE_CONTENT_FIELDS = frozenset({
+    "execution_order_id", "exchange_order_id", "symbol", "side", "order_type",
+    "quantity", "filled_quantity", "filled_value", "remote_status", "reduce_only",
+    "remote_created_time_ms", "remote_updated_time_ms", "price", "average_price",
+    "cancel_type", "reject_reason",
+})
+_OBSERVED_CLOSED_OBSERVATION_METADATA_FIELDS = frozenset({"server_time_ms"})
+
+
+class TestOrderObservedClosedContentPartition:
+    def test_stable_content_has_exactly_sixteen_fields(self):
+        assert len(_OBSERVED_CLOSED_STABLE_CONTENT_FIELDS) == 16
+
+    def test_observation_metadata_has_exactly_one_field(self):
+        assert len(_OBSERVED_CLOSED_OBSERVATION_METADATA_FIELDS) == 1
+
+    def test_partition_covers_every_field_without_overlap_or_gap(self):
+        all_fields = {f.name for f in dataclasses.fields(OrderObservedClosed)}
+        union = _OBSERVED_CLOSED_STABLE_CONTENT_FIELDS | _OBSERVED_CLOSED_OBSERVATION_METADATA_FIELDS
+        assert union == all_fields
+        assert not (
+            _OBSERVED_CLOSED_STABLE_CONTENT_FIELDS & _OBSERVED_CLOSED_OBSERVATION_METADATA_FIELDS
+        )
+
+    def test_two_observations_with_same_stable_content_differ_only_in_server_time_ms(self):
+        # Simula dos observaciones legítimas del mismo hecho remoto cerrado
+        # -- distintas consultas, mismo hecho. El Writer (no implementado
+        # aquí) las trataría como idempotentes.
+        first = _observed_closed(server_time_ms=1000)
+        second = _observed_closed(server_time_ms=2000)
+        assert first != second  # payload completo difiere (dataclass eq incluye todo)
+        stable_first = {f: getattr(first, f) for f in _OBSERVED_CLOSED_STABLE_CONTENT_FIELDS}
+        stable_second = {f: getattr(second, f) for f in _OBSERVED_CLOSED_STABLE_CONTENT_FIELDS}
+        assert stable_first == stable_second
+
+    def test_server_time_ms_is_received_never_generated(self):
+        # No hay reloj, no hay default -- confirmado también por
+        # TestPurity.test_no_clock_or_environment_access más abajo; aquí
+        # se confirma específicamente que server_time_ms es un campo
+        # posicional/keyword obligatorio, no un default_factory.
+        field = next(f for f in dataclasses.fields(OrderObservedClosed) if f.name == "server_time_ms")
+        assert field.default is dataclasses.MISSING
+        assert field.default_factory is dataclasses.MISSING
+
+
+# ---------------------------------------------------------------------------
 # Export a nivel de paquete (Hito 3.89 §16/§21 M11) -- ningún tipo de
 # evento anterior tenía cobertura explícita de su presencia en
 # execution_gateway.__all__/namespace; se agrega aquí sólo para el tipo
@@ -638,6 +1077,12 @@ class TestPackageExport:
 
     def test_in_all(self):
         assert "OrderIdentityReportedDuplicateByExchange" in execution_gateway.__all__
+
+    def test_observed_closed_importable_from_package(self):
+        assert execution_gateway.OrderObservedClosed is OrderObservedClosed
+
+    def test_observed_closed_in_all(self):
+        assert "OrderObservedClosed" in execution_gateway.__all__
 
 
 # ---------------------------------------------------------------------------
@@ -898,6 +1343,60 @@ class TestCoexistenceWithOtherFacts:
         assert ev1.payload is duplicate
         assert ev2.payload is observed
 
+    # ADR-012 D9: [Attempted, Unknown, ObservedClosed] -- Unknown no se
+    # borra ni se transforma; ambos coexisten para la misma identidad.
+    def test_unknown_and_observed_closed_coexist_for_the_same_order_id(self):
+        unknown = _unknown(execution_order_id=_ORDER_ID)
+        closed = _observed_closed(execution_order_id=_ORDER_ID)
+        assert unknown.execution_order_id == closed.execution_order_id
+        assert type(unknown) is not type(closed)
+
+    def test_observed_closed_does_not_mutate_prior_unknown(self):
+        unknown = _unknown(execution_order_id=_ORDER_ID)
+        snapshot = repr(unknown)
+        _observed_closed(execution_order_id=_ORDER_ID)
+        assert repr(unknown) == snapshot
+
+    # ADR-012 D10: [Attempted, ObservedClosed] sin Unknown -- caso crash,
+    # representable sin inventar ningún hecho intermedio.
+    def test_attempt_and_observed_closed_coexist_without_any_unknown(self):
+        attempt = _attempt(execution_order_id=_ORDER_ID)
+        closed = _observed_closed(execution_order_id=_ORDER_ID)
+        assert attempt.execution_order_id == closed.execution_order_id
+        assert type(attempt) is not type(closed)
+
+    # ADR-012 D11: [Attempted, Accepted, ObservedClosed] -- ciclo normal,
+    # ObservedClosed no es un evento de error.
+    def test_accepted_and_observed_closed_coexist(self):
+        accepted = _accepted(execution_order_id=_ORDER_ID)
+        closed = _observed_closed(execution_order_id=_ORDER_ID)
+        assert accepted.execution_order_id == closed.execution_order_id
+        assert type(accepted) is not type(closed)
+
+    # ADR-013 D13(a): [Attempted, Unknown, <110072>, ObservedClosed] --
+    # los cuatro hechos coexisten sin contradicción estructural.
+    def test_duplicate_and_observed_closed_coexist(self):
+        duplicate = _duplicate(execution_order_id=_ORDER_ID)
+        closed = _observed_closed(execution_order_id=_ORDER_ID)
+        assert duplicate.execution_order_id == closed.execution_order_id
+        assert type(duplicate) is not type(closed)
+
+    def test_full_market_acceptance_case_sequence_constructs_without_contradiction(self):
+        # ADR-012 D14a, el acceptance case principal: MARKET, ACK perdido,
+        # llenada rápido -- [Attempted, Unknown, <110072>, ObservedClosed].
+        # Sólo construcción de objetos -- sin Projection, sin state machine.
+        attempt = _attempt(execution_order_id=_ORDER_ID, order_type="market", price=None)
+        unknown = _unknown(execution_order_id=_ORDER_ID, reason="transport_failure")
+        duplicate = _duplicate(execution_order_id=_ORDER_ID)
+        closed = _observed_closed(
+            execution_order_id=_ORDER_ID, order_type="market", price=None,
+            remote_status="filled", quantity=Decimal("1"), filled_quantity=Decimal("1"),
+            filled_value=Decimal("100"), average_price=Decimal("100"),
+        )
+        events = [attempt, unknown, duplicate, closed]
+        assert all(e.execution_order_id == _ORDER_ID for e in events)
+        assert len({type(e) for e in events}) == 4
+
 
 # ---------------------------------------------------------------------------
 # execution_order_id: type-safety sistemática y simétrica entre los seis
@@ -921,6 +1420,7 @@ _EVENT_ORDER_ID_BUILDERS = {
     "OrderRejectedByExchange": _rejected,
     "OrderIdentityReportedDuplicateByExchange": _duplicate,
     "OrderObservedOpen": _observed,
+    "OrderObservedClosed": _observed_closed,
 }
 
 _BAD_EXECUTION_ORDER_IDS = [None, "ord_" + "a" * 32, 123, True, 1.5, b"x", object()]
@@ -968,8 +1468,13 @@ class TestAuthority:
     def test_observed_open_is_observed(self):
         assert isinstance(_observed(), ObservedFact)
 
+    def test_observed_closed_is_observed(self):
+        assert isinstance(_observed_closed(), ObservedFact)
+        assert not isinstance(_observed_closed(), RemoteFact)
+        assert not isinstance(_observed_closed(), LocalFact)
+
     def test_authorities_are_mutually_exclusive_marker_hierarchies(self):
-        events = [_attempt(), _unknown(), _accepted(), _rejected(), _duplicate(), _observed()]
+        events = [_attempt(), _unknown(), _accepted(), _rejected(), _duplicate(), _observed(), _observed_closed()]
         for event in events:
             markers = [isinstance(event, m) for m in (LocalFact, RemoteFact, ObservedFact)]
             assert sum(markers) == 1
@@ -978,6 +1483,7 @@ class TestAuthority:
         for cls in (
             OrderSubmissionAttempted, OrderSubmissionOutcomeUnknown, OrderAcceptedByExchange,
             OrderRejectedByExchange, OrderIdentityReportedDuplicateByExchange, OrderObservedOpen,
+            OrderObservedClosed,
         ):
             names = {f.name for f in dataclasses.fields(cls)}
             assert "authority" not in names
@@ -987,7 +1493,7 @@ class TestAuthority:
         # marcadora es documentalmente "nunca instanciada directamente",
         # no forzado en runtime -- confirmamos que ningún tipo concreto
         # ES la propia clase marcadora (isinstance exacto, no subclase).
-        for event in (_attempt(), _unknown(), _accepted(), _rejected(), _duplicate(), _observed()):
+        for event in (_attempt(), _unknown(), _accepted(), _rejected(), _duplicate(), _observed(), _observed_closed()):
             assert type(event) is not ExecutionLedgerEventPayload
             assert type(event) not in (LocalFact, RemoteFact, ObservedFact)
 
@@ -1014,6 +1520,7 @@ class TestUncertaintyRepresentation:
         for cls in (
             OrderSubmissionAttempted, OrderSubmissionOutcomeUnknown, OrderAcceptedByExchange,
             OrderRejectedByExchange, OrderIdentityReportedDuplicateByExchange, OrderObservedOpen,
+            OrderObservedClosed,
             ExecutionLedgerEvent,
         ):
             for forbidden in ("mutate", "correct", "replace", "mark_resolved", "resolve"):
@@ -1058,6 +1565,18 @@ class TestDecimalUsage:
         with pytest.raises(TypeError):
             _attempt(price=100.5)
 
+    def test_observed_closed_quantity_rejects_float(self):
+        with pytest.raises(TypeError):
+            _observed_closed(quantity=1.5)
+
+    def test_observed_closed_filled_quantity_rejects_float(self):
+        with pytest.raises(TypeError):
+            _observed_closed(filled_quantity=0.5)
+
+    def test_observed_closed_filled_value_rejects_float(self):
+        with pytest.raises(TypeError):
+            _observed_closed(filled_value=50.0)
+
 
 # ---------------------------------------------------------------------------
 # Conjunto exacto de campos -- protege contra la adición silenciosa de un
@@ -1094,6 +1613,15 @@ class TestExactFieldSets:
         assert names == {
             "execution_order_id", "exchange_order_id", "symbol", "side", "order_type",
             "quantity", "filled_quantity", "status", "reduce_only", "server_time_ms", "price",
+        }
+
+    def test_observed_closed_fields(self):
+        names = {f.name for f in dataclasses.fields(OrderObservedClosed)}
+        assert names == {
+            "execution_order_id", "exchange_order_id", "symbol", "side", "order_type",
+            "quantity", "filled_quantity", "filled_value", "remote_status", "reduce_only",
+            "server_time_ms", "remote_created_time_ms", "remote_updated_time_ms", "price",
+            "average_price", "cancel_type", "reject_reason",
         }
 
     def test_envelope_fields(self):
@@ -1159,6 +1687,7 @@ class TestPurity:
         for cls in (
             OrderSubmissionAttempted, OrderSubmissionOutcomeUnknown, OrderAcceptedByExchange,
             OrderRejectedByExchange, OrderIdentityReportedDuplicateByExchange, OrderObservedOpen,
+            OrderObservedClosed,
             ExecutionLedgerEvent,
         ):
             names = {f.name for f in dataclasses.fields(cls)}
@@ -1169,6 +1698,7 @@ class TestPurity:
         for cls in (
             OrderSubmissionAttempted, OrderSubmissionOutcomeUnknown, OrderAcceptedByExchange,
             OrderRejectedByExchange, OrderIdentityReportedDuplicateByExchange, OrderObservedOpen,
+            OrderObservedClosed,
             ExecutionLedgerEvent,
         ):
             for field in dataclasses.fields(cls):
@@ -1178,6 +1708,7 @@ class TestPurity:
         for cls in (
             OrderSubmissionAttempted, OrderSubmissionOutcomeUnknown, OrderAcceptedByExchange,
             OrderRejectedByExchange, OrderIdentityReportedDuplicateByExchange, OrderObservedOpen,
+            OrderObservedClosed,
             ExecutionLedgerEvent,
         ):
             assert dataclasses.is_dataclass(cls)

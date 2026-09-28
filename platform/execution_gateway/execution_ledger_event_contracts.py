@@ -6,6 +6,11 @@ from execution_gateway.execution_identity_contracts import ExecutionAccountId, E
 _VALID_SIDES = {"buy", "sell"}
 _VALID_ORDER_TYPES = {"market", "limit"}
 _VALID_OPEN_ORDER_STATUSES = {"new", "partially_filled", "untriggered", "triggered"}
+# ADR-012 D1-D3: de los seis estados "closed" del enum oficial de Bybit, sólo
+# estos tres son alcanzables por una orden Phoenix (category=linear,
+# market/limit, sin condicionales/TP-SL/OCO) -- mismo conjunto ya congelado
+# en order_history_lookup_contracts.py (Hito 3.86).
+_VALID_CLOSED_ORDER_STATUSES = {"filled", "cancelled", "rejected"}
 _VALID_OUTCOME_UNKNOWN_REASONS = {
     "transport_failure",
     "malformed_response",
@@ -48,6 +53,15 @@ def _require_finite_positive_decimal(value, *, field: str) -> None:
 def _require_non_negative_int(value, *, field: str) -> None:
     if isinstance(value, bool) or not isinstance(value, int):
         raise TypeError(f"{field} must be int, got: {type(value).__name__}")
+    if value < 0:
+        raise ValueError(f"{field} must be >= 0, got: {value}")
+
+
+def _require_finite_non_negative_decimal(value, *, field: str) -> None:
+    if not isinstance(value, Decimal):
+        raise TypeError(f"{field} must be Decimal, got: {type(value).__name__}")
+    if not value.is_finite():
+        raise ValueError(f"{field} must be finite")
     if value < 0:
         raise ValueError(f"{field} must be >= 0, got: {value}")
 
@@ -476,6 +490,171 @@ class OrderObservedOpen(ObservedFact):
                 raise ValueError("price must be finite")
             if self.price <= 0:
                 raise ValueError(f"price must be > 0, got: {self.price}")
+
+
+@dataclass(frozen=True)
+class OrderObservedClosed(ObservedFact):
+    """Hecho OBSERVED: Phoenix encontró, mediante una lectura posterior
+    (Open & Closed Orders u Order History), una orden CERRADA que
+    correlaciona con una `ExecutionOrderId` propia (`order_id ==
+    orderLinkId`) -- octavo tipo de evento, congelado por ADR-012
+    (contrato D16) y reafirmado sin cambios por ADR-015 (Hito 3.93).
+
+    Es la observación ordinaria de que una orden terminó -- NO un evento
+    de recovery ni de error. Se produce igual tras `[Attempted, Accepted]`,
+    tras `[Attempted, Unknown]` o tras `[Attempted]` a secas (ventana de
+    crash, ADR-012 D10). Terminal y absorbente (ADR-012 D9/D13): ningún
+    hecho posterior para la misma orden la reabre.
+
+    A diferencia de `OrderObservedOpen` (snapshot, se repite legítimamente
+    con `filled_quantity` creciente), este hecho es ESTABLE POR CONTENIDO
+    -- dos observaciones legítimas de la misma orden cerrada deben
+    coincidir en los 16 campos que describen el hecho remoto ("STABLE
+    REMOTE FACT CONTENT"): `execution_order_id`, `exchange_order_id`,
+    `symbol`, `side`, `order_type`, `quantity`, `filled_quantity`,
+    `filled_value`, `remote_status`, `reduce_only`,
+    `remote_created_time_ms`, `remote_updated_time_ms`, `price`,
+    `average_price`, `cancel_type`, `reject_reason`. El campo restante,
+    `server_time_ms`, es OBSERVATION METADATA -- describe cuándo respondió
+    ESTA consulta, no una propiedad de la orden, y difiere legítimamente
+    entre observaciones del mismo hecho remoto (ADR-012, "Corrección
+    post-reauditoría de D12", 2026-09-17: `server_time_ms` excluido del
+    contenido estable; ante una futura colisión de idempotencia en el
+    Writer, contenido estable idéntico => éxito idempotente conservando
+    el `server_time_ms` de la primera observación durable committeada;
+    contenido estable distinto => fallo cerrado, nunca sobrescritura
+    silenciosa). Esta clase no implementa esa comparación -- pertenece al
+    futuro Writer (ADR-011/ADR-015); aquí sólo se preserva la partición de
+    campos que la hace posible.
+
+    NO es un fill ledger: `filled_quantity`/`filled_value`/`average_price`
+    son los agregados acumulados que Bybit reporta A NIVEL DE ORDEN
+    (`cumExecQty`/`cumExecValue`/`avgPrice`, ADR-012 D4) -- nunca
+    ejecuciones individuales, fees por fill, ni atribución de trades.
+
+    `remote_updated_time_ms` es el `updatedTime` que Bybit documenta -- NO
+    se interpreta como "tiempo de fill" ni "tiempo de cierre" (ADR-012 D7).
+
+    Mismo tratamiento de identidad que `OrderObservedOpen`:
+    `execution_order_id` obligatorio, nunca `str` suelto, nunca sustituido
+    por `exchange_order_id` (ADR-010 resolución de OQ6, ADR-012 D6).
+
+    Deliberadamente NO importa ni referencia `ObservedOrderEconomics` ni
+    `EconomicComparator` (Hito 3.91): la verificación económica de que esta
+    observación coincide con `OrderSubmissionAttempted(X)` es
+    responsabilidad de un componente externo que decide SI este evento se
+    construye -- nunca de este contrato (ADR-013 D8, ADR-015 §14).
+    """
+
+    execution_order_id: ExecutionOrderId
+    exchange_order_id: str
+    symbol: str
+    side: str
+    order_type: str
+    quantity: Decimal
+    filled_quantity: Decimal
+    filled_value: Decimal
+    remote_status: str
+    reduce_only: bool
+    server_time_ms: int
+    remote_created_time_ms: int
+    remote_updated_time_ms: int
+    price: Decimal | None = None
+    average_price: Decimal | None = None
+    cancel_type: str | None = None
+    reject_reason: str | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.execution_order_id, ExecutionOrderId):
+            raise TypeError(
+                f"execution_order_id must be ExecutionOrderId, "
+                f"got: {type(self.execution_order_id).__name__}"
+            )
+        _require_non_empty_str(self.exchange_order_id, field="exchange_order_id")
+        _require_non_empty_str(self.symbol, field="symbol")
+        _require_side(self.side, field="side")
+        _require_order_type(self.order_type, field="order_type")
+        _require_finite_positive_decimal(self.quantity, field="quantity")
+        _require_finite_non_negative_decimal(self.filled_quantity, field="filled_quantity")
+        if self.filled_quantity > self.quantity:
+            raise ValueError(
+                f"filled_quantity must be <= quantity, "
+                f"got: filled_quantity={self.filled_quantity}, quantity={self.quantity}"
+            )
+        _require_finite_non_negative_decimal(self.filled_value, field="filled_value")
+
+        _require_non_empty_str(self.remote_status, field="remote_status")
+        if self.remote_status not in _VALID_CLOSED_ORDER_STATUSES:
+            raise ValueError(
+                f"remote_status must be one of {sorted(_VALID_CLOSED_ORDER_STATUSES)}, "
+                f"got: {self.remote_status!r}"
+            )
+
+        if not isinstance(self.reduce_only, bool):
+            raise TypeError(f"reduce_only must be bool, got: {type(self.reduce_only).__name__}")
+
+        _require_non_negative_int(self.server_time_ms, field="server_time_ms")
+        _require_non_negative_int(self.remote_created_time_ms, field="remote_created_time_ms")
+        _require_non_negative_int(self.remote_updated_time_ms, field="remote_updated_time_ms")
+        if self.remote_updated_time_ms < self.remote_created_time_ms:
+            raise ValueError(
+                f"remote_updated_time_ms must be >= remote_created_time_ms, "
+                f"got: updated={self.remote_updated_time_ms}, created={self.remote_created_time_ms}"
+            )
+
+        if self.price is not None:
+            _require_finite_positive_decimal(self.price, field="price")
+        if self.order_type == "limit" and self.price is None:
+            raise ValueError("a 'limit' order must have price > 0, got price=None")
+        if self.order_type == "market" and self.price is not None:
+            raise ValueError("a 'market' order must have price=None")
+
+        if self.average_price is not None:
+            _require_finite_positive_decimal(self.average_price, field="average_price")
+        if (self.average_price is None) != (self.filled_quantity == 0):
+            raise ValueError(
+                "average_price must be None if and only if filled_quantity == 0, "
+                f"got: average_price={self.average_price!r}, filled_quantity={self.filled_quantity}"
+            )
+        if (self.filled_value == 0) != (self.filled_quantity == 0):
+            raise ValueError(
+                "filled_value must be 0 if and only if filled_quantity == 0, "
+                f"got: filled_value={self.filled_value}, filled_quantity={self.filled_quantity}"
+            )
+
+        if self.cancel_type is not None:
+            _require_non_empty_str(self.cancel_type, field="cancel_type")
+        if self.remote_status != "cancelled" and self.cancel_type is not None:
+            raise ValueError(
+                f"cancel_type must be None when remote_status != 'cancelled', "
+                f"got: remote_status={self.remote_status!r}, cancel_type={self.cancel_type!r}"
+            )
+
+        if self.reject_reason is not None:
+            _require_non_empty_str(self.reject_reason, field="reject_reason")
+
+        # Invariantes cruzadas ADR-012 D3 -- el estado remoto es congruente
+        # con la magnitud efectivamente ejecutada. "Cancelled" con
+        # filled_quantity == quantity sería, por definición de Bybit,
+        # "Filled" -- una respuesta real que afirmara ambas cosas a la vez
+        # es contradictoria y se rechaza en vez de silenciarse.
+        if self.remote_status == "filled" and self.filled_quantity != self.quantity:
+            raise ValueError(
+                "remote_status == 'filled' requires filled_quantity == quantity, "
+                f"got: filled_quantity={self.filled_quantity}, quantity={self.quantity}"
+            )
+        if self.remote_status == "rejected" and self.filled_quantity != 0:
+            raise ValueError(
+                "remote_status == 'rejected' requires filled_quantity == 0, "
+                f"got: filled_quantity={self.filled_quantity}"
+            )
+        if self.remote_status == "cancelled" and self.filled_quantity >= self.quantity:
+            raise ValueError(
+                "remote_status == 'cancelled' requires filled_quantity < quantity "
+                "(MENOR-2, ADR-012: invariante conservadora pendiente de validación empírica "
+                "en Bybit Demo), "
+                f"got: filled_quantity={self.filled_quantity}, quantity={self.quantity}"
+            )
 
 
 # ---------------------------------------------------------------------------
