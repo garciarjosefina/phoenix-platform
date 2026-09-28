@@ -125,6 +125,15 @@ class TestInputContractMatchesExistingBoundary:
 
 class TestMutationDiscriminatingFixtures:
     _HIGH_PRECISION_VALUE = 1.123456789012345
+    # Auditoría adversarial 3.92, MENOR-1: 0.2+0.1 es un valor que el Port
+    # SÍ acepta hoy (float ordinario, ninguna validación de ExecutionRequest
+    # lo rechaza) y cuya representación canónica de 17 dígitos significativos
+    # es más precisa que la fixture de 15 dígitos de arriba -- round(v,15) y
+    # round(v,16) NO alteran _HIGH_PRECISION_VALUE (ya tiene <=15 decimales
+    # visibles), así que un mutante M3 con esas precisiones sólo moría antes
+    # por un efecto incidental sobre los tests de `bool` (round(True, N) es
+    # 1), no por perder economía real. Este valor sí discrimina ambas.
+    _SUM_ARTIFACT_VALUE = 0.2 + 0.1
 
     def test_high_precision_value_would_be_altered_by_eight_decimal_rounding(self):
         exact = canonical_execution_decimal(self._HIGH_PRECISION_VALUE)
@@ -146,6 +155,30 @@ class TestMutationDiscriminatingFixtures:
         assert Decimal(0.1) != Decimal(str(0.1))
         assert canonical_execution_decimal(0.1) == Decimal(str(0.1))
 
+    def test_sum_artifact_value_is_a_valid_port_economy(self):
+        # Precondición: el Port acepta este valor sin ninguna validación
+        # especial -- no es un valor de laboratorio, es aritmética de punto
+        # flotante ordinaria que puede llegar por cualquier cálculo previo.
+        assert self._SUM_ARTIFACT_VALUE > 0
+        assert str(self._SUM_ARTIFACT_VALUE) == "0.30000000000000004"
+
+    def test_sum_artifact_value_is_preserved_at_full_precision(self):
+        # La corrección debe fallar (canonical != "0.3") si alguna vez se
+        # reintroduce round(value, 15) o round(value, 16) antes de convertir
+        # -- ambos colapsan este valor exactamente a Decimal("0.3").
+        exact = canonical_execution_decimal(self._SUM_ARTIFACT_VALUE)
+        assert exact == Decimal("0.30000000000000004")
+        assert exact != Decimal("0.3")
+
+    @pytest.mark.parametrize("precision", [15, 16])
+    def test_sum_artifact_value_would_be_altered_by_fifteen_or_sixteen_decimal_rounding(self, precision):
+        exact = canonical_execution_decimal(self._SUM_ARTIFACT_VALUE)
+        rounded_then_converted = Decimal(str(round(self._SUM_ARTIFACT_VALUE, precision)))
+        # Precondición explícita del ataque -- sin esto, la fixture no
+        # discriminaría un mutante M3 a esa precisión.
+        assert exact != rounded_then_converted
+        assert rounded_then_converted == Decimal("0.3")
+
 
 # ---------------------------------------------------------------------------
 # Pureza: determinista, sin reloj/entorno/red/storage/estado mutable.
@@ -159,14 +192,22 @@ class TestPurity:
     def test_float_round_trip_after_conversion_is_a_mathematical_no_op(self):
         # G2-M6 (Hito 3.92): "el adapter aplica un float() extra tras
         # canonical" resultó SOBREVIVE en la batería de mutación --
-        # confirmado como EQUIVALENTE, no como hueco de cobertura.
-        # `str(float)` en Python garantiza la representación decimal más
-        # corta que reconstruye ese mismo float exactamente (desde Python
-        # 3.1); por lo tanto Decimal(str(float(canonical_execution_decimal(v))))
-        # es indistinguible de canonical_execution_decimal(v) para
-        # cualquier float finito -- no existe fixture que discrimine esta
-        # mutación porque no altera ningún valor real, mismo patrón que
-        # N35b en Hito 3.91 (`.normalize()` preserva el valor).
+        # confirmado como EQUIVALENTE POR VALOR para todo float ORIGINAL
+        # `v`, no como hueco de cobertura. `str(float)` en Python garantiza
+        # la representación decimal más corta que reconstruye ese mismo
+        # float exactamente (desde Python 3.1); por lo tanto
+        # Decimal(str(float(canonical_execution_decimal(v)))) es igual EN
+        # VALOR a canonical_execution_decimal(v) para cualquier float
+        # finito. Esta equivalencia depende de que el Decimal de partida
+        # provenga de un `float` vía esta misma función -- NO se generaliza
+        # a un Decimal arbitrario construido por otro camino (p.ej. uno
+        # con más dígitos significativos que los que un float puede
+        # representar perdería precisión en el `float()` intermedio).
+        # Reauditoría 3.92 (MENOR-3): la representación textual del
+        # resultado también coincide para estos floats, pero eso es
+        # consecuencia del mismo round-trip exacto, no una garantía
+        # adicional -- no se afirma para Decimales que no se originaron
+        # en un float.
         for value in (0.1, 0.01, 0.001, 1.1, 0.3, 123456789.123, 1e-8, 1e16):
             exact = canonical_execution_decimal(value)
             round_tripped = Decimal(str(float(exact)))
