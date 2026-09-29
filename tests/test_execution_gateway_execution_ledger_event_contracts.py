@@ -1008,6 +1008,268 @@ class TestOrderObservedClosedTimestamps:
         )
         assert ev.server_time_ms == 50
 
+    def test_server_time_ms_is_not_silently_reconstructed(self):
+        # Auditoría adversarial 3.94, MENOR-3: distinto de un test de tipo
+        # -- prueba que el valor RECIBIDO llega intacto, no que un valor
+        # inválido sea rechazado. Si el contrato alguna vez reconstruyera
+        # server_time_ms (p. ej. a un valor fijo) DESPUÉS de la validación,
+        # este test lo detectaría porque el valor recibido, no el
+        # reconstruido, es el que se compara.
+        assert _observed_closed(server_time_ms=4242).server_time_ms == 4242
+        assert _observed_closed(server_time_ms=0).server_time_ms == 0
+
+
+# ---------------------------------------------------------------------------
+# Preservación literal de valores (Hito 3.94, corrección post-auditoría
+# adversarial, IMPORTANTE-1). Los tests de construcción/tipo/invariantes de
+# arriba usan fixtures uniformes (economía por defecto en todos los campos
+# no atacados) -- una mutación que sobrescribiera un campo DESPUÉS de la
+# validación (p. ej. `object.__setattr__(self, 'reduce_only', False)`) no
+# fallaría ningún test existente porque el default YA es ese valor. Cada
+# test de esta clase usa al menos un valor deliberadamente distinto del
+# default en el campo que verifica, y afirma preservación literal --
+# mismo patrón que `test_copies_each_field_with_a_non_default_economy` de
+# Hito 3.91 y `test_symbol_with_padding_preserved_literal` de 3.91/3.92.
+# ---------------------------------------------------------------------------
+
+class TestOrderObservedClosedValuePreservation:
+    def test_preserves_every_field_with_a_fully_non_default_economy(self):
+        # Ninguno de estos valores coincide con el default de
+        # _observed_closed() -- una mutación que sobrescriba CUALQUIER
+        # campo tras la validación (con el valor por defecto u otro fijo)
+        # rompe esta única aserción exhaustiva.
+        marker = ExecutionOrderId(value="ord_" + "e" * 32)
+        ev = OrderObservedClosed(
+            execution_order_id=marker,
+            exchange_order_id="BYBIT-XORDER-77",
+            symbol="ethusdt",
+            side="sell",
+            order_type="limit",
+            quantity=Decimal("1.3700"),
+            filled_quantity=Decimal("0.4100"),
+            filled_value=Decimal("39.73"),
+            remote_status="cancelled",
+            reduce_only=True,
+            server_time_ms=4242,
+            remote_created_time_ms=900,
+            remote_updated_time_ms=1950,
+            price=Decimal("1234.567"),
+            average_price=Decimal("96.90"),
+            cancel_type="CancelByUser",
+            reject_reason="EC_CancelByOrderValueZero",
+        )
+        assert ev.execution_order_id is marker
+        assert ev.exchange_order_id == "BYBIT-XORDER-77"
+        assert ev.symbol == "ethusdt"
+        assert ev.side == "sell"
+        assert ev.order_type == "limit"
+        assert ev.quantity == Decimal("1.3700")
+        assert ev.filled_quantity == Decimal("0.4100")
+        assert ev.filled_value == Decimal("39.73")
+        assert ev.remote_status == "cancelled"
+        assert ev.reduce_only is True
+        assert ev.server_time_ms == 4242
+        assert ev.remote_created_time_ms == 900
+        assert ev.remote_updated_time_ms == 1950
+        assert ev.price == Decimal("1234.567")
+        assert ev.average_price == Decimal("96.90")
+        assert ev.cancel_type == "CancelByUser"
+        assert ev.reject_reason == "EC_CancelByOrderValueZero"
+
+    def test_reduce_only_true_preserved(self):
+        assert _observed_closed(reduce_only=True).reduce_only is True
+
+    def test_reduce_only_false_preserved(self):
+        assert _observed_closed(reduce_only=False).reduce_only is False
+
+    def test_side_sell_preserved(self):
+        assert _observed_closed(side="sell").side == "sell"
+
+    def test_side_buy_preserved(self):
+        assert _observed_closed(side="buy").side == "buy"
+
+    def test_order_type_market_preserved(self):
+        ev = _observed_closed(order_type="market", price=None)
+        assert ev.order_type == "market"
+
+    def test_order_type_limit_preserved(self):
+        ev = _observed_closed(order_type="limit", price=Decimal("100"))
+        assert ev.order_type == "limit"
+
+    def test_symbol_lowercase_preserved_without_case_normalization(self):
+        # "ethusdt" discrimina .upper()/.lower()/.casefold() -- ninguna
+        # normalización de case está autorizada (symbol es literal, mismo
+        # tratamiento que ADR-005 Decisión 3).
+        assert _observed_closed(symbol="ethusdt").symbol == "ethusdt"
+
+    def test_symbol_with_padding_preserved_literal(self):
+        # Espacios discriminan un .strip() indebido -- "ethusdt" por sí
+        # solo no lo haría al carecer de espacios.
+        ev = _observed_closed(symbol=" BTCUSDT ")
+        assert ev.symbol == " BTCUSDT "
+
+    def test_exchange_order_id_with_padding_preserved_literal(self):
+        ev = _observed_closed(exchange_order_id=" BYBIT-XORDER-77 ")
+        assert ev.exchange_order_id == " BYBIT-XORDER-77 "
+
+    def test_reject_reason_with_padding_preserved_verbatim(self):
+        ev = _observed_closed(
+            remote_status="rejected", quantity=Decimal("1"), filled_quantity=Decimal("0"),
+            filled_value=Decimal("0"), average_price=None, reject_reason=" EC_InsufficientBalance ",
+        )
+        assert ev.reject_reason == " EC_InsufficientBalance "
+
+    def test_filled_value_is_not_derived_from_quantity_times_price(self):
+        # Precondición explícita del ataque: ni filled_quantity*price ni
+        # filled_quantity*average_price coinciden con filled_value -- una
+        # mutación que RECALCULARA filled_value a partir de otros campos
+        # (en vez de preservar el valor recibido) produciría un valor
+        # distinto del literal, detectable por esta aserción.
+        quantity, price, average_price = Decimal("1"), Decimal("100"), Decimal("99.5")
+        filled_quantity, filled_value = Decimal("0.4"), Decimal("39.73")
+        assert filled_quantity * price != filled_value
+        assert filled_quantity * average_price != filled_value
+        ev = _observed_closed(
+            remote_status="cancelled", quantity=quantity, filled_quantity=filled_quantity,
+            filled_value=filled_value, price=price, average_price=average_price,
+        )
+        assert ev.filled_value == Decimal("39.73")
+
+    def test_remote_updated_time_ms_preserved_when_different_from_created(self):
+        ev = _observed_closed(remote_created_time_ms=900, remote_updated_time_ms=1950)
+        assert ev.remote_updated_time_ms == 1950
+        assert ev.remote_created_time_ms == 900
+
+
+# ---------------------------------------------------------------------------
+# Clasificación de Decimal.normalize() (Hito 3.94, corrección post-
+# auditoría, respuesta a IMPORTANTE-1/§7 y §19): equivalente, no hueco de
+# cobertura. ADR-012 exige preservación por VALOR de los campos Decimal
+# (nunca literal de representación textual, a diferencia de symbol/side,
+# que sí son literales de string -- ADR-005 Decisión 3). `Decimal.__eq__`
+# compara por valor, no por representación (`Decimal("1.3700") ==
+# Decimal("1.37")` es `True`), y ninguna invariante de este contrato
+# compara `str()`/exponente de un campo Decimal. Por tanto una mutación
+# que aplicara `.normalize()` a `quantity` (o cualquier otro campo
+# Decimal) preserva el valor exacto y es EQUIVALENTE -- mismo patrón que
+# N35b en el Economic Comparator de Hito 3.91. No se escribe un test
+# artificial que exija representación textual específica: ADR-012 no lo
+# exige y hacerlo violaría la propia guía de esta corrección (no inventar
+# garantías nuevas para matar redundancia).
+# ---------------------------------------------------------------------------
+
+class TestOrderObservedClosedDecimalNormalizeIsEquivalent:
+    def test_normalize_does_not_change_value_equality(self):
+        assert Decimal("1.3700").normalize() == Decimal("1.3700")
+        assert Decimal("1.3700").normalize() == Decimal("1.37")
+
+    def test_contract_does_not_compare_decimal_string_representation_anywhere(self):
+        # Confirma la premisa de la equivalencia: ninguna invariante de
+        # OrderObservedClosed invoca str()/as_tuple() sobre un campo
+        # Decimal -- las comparaciones cruzadas son aritméticas (==, <, >).
+        source = inspect.getsource(OrderObservedClosed)
+        for banned in ("str(self.quantity", "str(self.filled_quantity", "str(self.filled_value",
+                       "str(self.price", "str(self.average_price", ".as_tuple("):
+            assert banned not in source
+
+
+# ---------------------------------------------------------------------------
+# Sensibilidad a mayúsculas/espacios de remote_status (Hito 3.94,
+# corrección post-auditoría, IMPORTANTE-2). El contrato compara contra
+# `_VALID_CLOSED_ORDER_STATUSES` con `in`, sin normalización -- ninguna
+# variante de casing/espaciado debe pasar.
+# ---------------------------------------------------------------------------
+
+class TestOrderObservedClosedStatusCaseSensitivity:
+    @pytest.mark.parametrize("bad_status", [
+        "Filled", "FILLED", " filled", "filled ",
+        "Cancelled", "CANCELLED", " cancelled",
+        "Rejected", "REJECTED", " rejected",
+    ])
+    def test_rejects_any_casing_or_spacing_variant(self, bad_status):
+        with pytest.raises(ValueError):
+            _observed_closed(remote_status=bad_status)
+
+    @pytest.mark.parametrize("good_status,kwargs", [
+        ("filled", dict(quantity=Decimal("1"), filled_quantity=Decimal("1"),
+                        filled_value=Decimal("100"), average_price=Decimal("100"))),
+        ("cancelled", dict(quantity=Decimal("1"), filled_quantity=Decimal("0"),
+                            filled_value=Decimal("0"), average_price=None)),
+        ("rejected", dict(quantity=Decimal("1"), filled_quantity=Decimal("0"),
+                           filled_value=Decimal("0"), average_price=None)),
+    ])
+    def test_accepts_only_the_exact_lowercase_token(self, good_status, kwargs):
+        ev = _observed_closed(remote_status=good_status, **kwargs)
+        assert ev.remote_status == good_status
+
+
+# ---------------------------------------------------------------------------
+# Envelope real (Hito 3.94, corrección post-auditoría, IMPORTANTE-3). La
+# auditoría demostró EXPRESABLE una mutación que excluye este tipo del
+# envelope (el aceptado hasta ahora era un enunciado sin test que lo
+# probara) -- se agrega aquí, mismo patrón que
+# TestOrderIdentityReportedDuplicateByExchange.test_works_as_envelope_payload
+# de Hito 3.89.
+# ---------------------------------------------------------------------------
+
+class TestOrderObservedClosedEnvelope:
+    def test_works_as_envelope_payload(self):
+        payload = _observed_closed()
+        event = _envelope(payload=payload)
+        assert isinstance(event.payload, OrderObservedClosed)
+        assert event.payload is payload
+
+    def test_envelope_still_has_exactly_four_fields_with_this_payload(self):
+        event = _envelope(payload=_observed_closed())
+        names = {f.name for f in dataclasses.fields(event)}
+        assert names == {"event_id", "execution_account_id", "occurred_at_ms", "payload"}
+
+
+# ---------------------------------------------------------------------------
+# Cotas de quantity (Hito 3.94, corrección post-auditoría, MENOR-1).
+# ---------------------------------------------------------------------------
+
+class TestOrderObservedClosedQuantityBounds:
+    # filled_quantity=0/remote_status="rejected" evita que la cruzada
+    # `filled_quantity > quantity` dispare antes -- aísla causalmente la
+    # guarda de positividad de `quantity` (mata M6: positive -> non-negative
+    # sobrevive si `quantity=0` colisiona con otra invariante primero).
+    def test_quantity_rejects_zero(self):
+        with pytest.raises(ValueError):
+            _observed_closed(
+                remote_status="rejected", quantity=Decimal("0"), filled_quantity=Decimal("0"),
+                filled_value=Decimal("0"), average_price=None,
+            )
+
+    def test_quantity_rejects_negative(self):
+        with pytest.raises(ValueError):
+            _observed_closed(
+                remote_status="rejected", quantity=Decimal("-1"), filled_quantity=Decimal("0"),
+                filled_value=Decimal("0"), average_price=None,
+            )
+
+
+# ---------------------------------------------------------------------------
+# Superficie exacta de atributos públicos (Hito 3.94, corrección post-
+# auditoría, MENOR-2). El test previo de atributos prohibidos
+# (`test_no_forbidden_attributes_on_real_instance`) usa una lista negra
+# que crecería indefinidamente; éste usa una lista blanca derivada de
+# `dataclasses.fields()` y la compara contra TODO atributo público no
+# invocable de una instancia real -- una `@property` nueva (calculada, no
+# almacenada en `__dict__`, por lo que `vars()` no la vería) SÍ aparece en
+# `dir()` y no es invocable al acceder a ella, así que queda atrapada.
+# ---------------------------------------------------------------------------
+
+class TestOrderObservedClosedPublicAttributeSurface:
+    def test_public_non_callable_attributes_equal_exactly_the_declared_fields(self):
+        ev = _observed_closed()
+        expected = {f.name for f in dataclasses.fields(OrderObservedClosed)}
+        actual = {
+            name for name in dir(ev)
+            if not name.startswith("_") and not callable(getattr(ev, name))
+        }
+        assert actual == expected
+
 
 # ---------------------------------------------------------------------------
 # Partición de contenido estable vs. metadato de observación (ADR-012,
