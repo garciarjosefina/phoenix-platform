@@ -1681,3 +1681,66 @@ Nada: ni `OrderObservedClosed`, ni el puerto de submisión, ni su adapter, ni Wr
 **Archivos de producción modificados:** ninguno. **Tests:** ninguno. **Suite:** 6936 passing, sin cambio.
 **Sin conexión real con Bybit; sin Railway; sin Postgres; sin Writer; sin recovery; sin Projection; sin Repair.**
 **Hito 3.93 — DISEÑADO.** Próximo hito: **3.94 — contrato `OrderObservedClosed`**. OQ1 (resolución por operador) y OQ2 (entorno Postgres) quedan registradas como decisiones requeridas antes de sus hitos respectivos; ninguna bloquea 3.94.
+
+
+---
+
+## ADR-016 — Selección del Hito 3.95: contrato `OrderSubmissionPort` + familia `OrderSubmissionOutcome` (nodo [b] del DAG de ADR-015)
+
+**Fecha:** 2026-09-30
+**Contexto:** Hito 3.95, planificación. Con 3.94 (`OrderObservedClosed`, nodo [a]) aceptado, se selecciona formalmente el siguiente nodo implementable del DAG de ADR-015 D22. Diseño/planificación únicamente: cero producción, cero tests. ADR-011…015 no se modifican.
+
+### FACT — estado real del DAG (verificado en producción, no desde docs)
+
+| Nodo | Estado | Depende de | Desbloquea | ¿Aislable/auditable sin red? | OQ |
+|---|---|---|---|---|---|
+| [a] `OrderObservedClosed` | **ACEPTADO** (3.94) | — | [g], [i] | — | — |
+| [b] `OrderSubmissionPort` + `OrderSubmissionOutcome` | no existe | — | [f], [j] | sí (contrato puro) | ninguna |
+| [c] Protocols Writer/Reader/Lease + `AppendReceipt`/errores | no existe | — | [g], [h] | sí como contrato, pero su semántica real (durabilidad, colisión, lease de sesión) sólo es verificable con PostgreSQL | OQ1 afecta el conjunto "resolutorio" del Reader (el futuro hecho del operador lo ampliará) |
+| [f] `BybitOrderSubmissionAdapter` | no existe | [b] | [j] | sí, con transport falso; compone payload builder + endpoint executor existentes con un interpreter propio que preserva `time_ms`, sin tocar componentes aceptados | ninguna |
+| [g] Postgres Writer/Reader/Lease | no existe | [a], [c], OQ2 | [h], [i], [j] | **no**: sin PostgreSQL ni driver no hay forma honesta de probar `synchronous_commit`, índice parcial, advisory locks, regla de colisión | **OQ2 duro** |
+| [h] `AccountSubmissionGate` | no existe | [c], [g] | [i], [j] | política pura trivial, sin valor antes de [g] | activación ← OQ1 |
+| [i] `ExecutionRecoveryService` | no existe | [a], [g], [h] | [k] | con dobles, sí; activación no | activación ← OQ1 |
+| [j] `ExecutionSubmissionCoordinator` | no existe | [f], [g], [h] | [k] | con dobles, sí; activación no | OQ5 (ergonomía) |
+| [k] composition root + binding cuenta↔credenciales + activación | no existe | [i], [j], OQ1 | — | no | **OQ1 duro** |
+| Projection | no requerida (ADR-015 D19) | — | — | — | — |
+
+Prerrequisito adicional, ya nombrado en ADR-015 D14/F9 pero sin nodo propio: **binding cuenta↔credenciales** (primitiva productiva de `GET /v5/user/query-api`, hoy sólo en el smoke test). Sin OQ; entra en [k].
+
+**Impacto de OQ1:** bloquea sólo la **activación** ([k]) y, en menor grado, fija que el conjunto resolutorio del Reader será ampliado por un hecho futuro. No bloquea [b], [c] como contrato, [f], ni la implementación con dobles de [i]/[j].
+**Impacto de OQ2:** bloquea [g] y todo lo que requiera durabilidad real ([h] con semántica, [i]/[j] operativos).
+
+### DECISION
+
+**D1 — Hito 3.95 = nodo [b]: contrato `OrderSubmissionPort` + familia `OrderSubmissionOutcome`, sin adapter.** Comparación con los demás candidatos:
+- **[g] Writer/Reader Postgres**: bloqueado por OQ2 (entorno + primera dependencia externa); implementarlo sin PostgreSQL real produciría un Writer cuya semántica central no se puede verificar — el riesgo que ADR-011 opción C y D-014 advierten.
+- **[c] contratos Writer/Reader/Lease**: implementables, pero su semántica material (colisión de contenido, índice parcial, lease de sesión) sólo existe en la implementación Postgres, y el conjunto resolutorio del Reader cambiará con OQ1 — riesgo de retrabajo y de "abstracción sin semántica".
+- **[h] gate**: sin Reader real es una función trivial sin datos; no reduce riesgo.
+- **[f] adapter**: depende de [b]; conviene que el contrato que consume se audite primero y por separado.
+- **[b]**: sin dependencias, sin OQ, forma ya congelada por ADR-015 D3 (no es código descartable: lo consumen [f] y [j]), puro, auditable en aislamiento (isomorfismo verificable contra los payloads aceptados, mismo método que 3.94 frente a 3.86), no puede habilitar ejecución remota, y desbloquea dos nodos.
+
+**D2 — Contrato congelado para la implementación (derivado de ADR-015 D3 y de los payloads aceptados; ninguna decisión nueva):**
+- `OrderSubmissionPort` — `Protocol` `@runtime_checkable` (mismo patrón que `ExecutionGateway`, `gateway.py`), único método `submit(self, request: ExecutionRequest) -> OrderSubmissionOutcome` (entrada `ExecutionRequest`, como ADR-015 D3/D7).
+- `OrderSubmissionOutcome` — marcador base no instanciable (mismo patrón que `BybitOrderHistoryLookupResult`), cuatro subtipos `frozen`:
+  - `SubmissionAccepted(exchange_order_id: str, server_time_ms: int)`
+  - `SubmissionRejected(ret_code: int, ret_msg: str, server_time_ms: int)` — prohíbe `ret_code == 110072` (espejo de `OrderRejectedByExchange`, ADR-013 D3)
+  - `SubmissionIdentityDuplicate(ret_code: int, ret_msg: str, server_time_ms: int)` — exige `ret_code == 110072` exacto (espejo de `OrderIdentityReportedDuplicateByExchange`)
+  - `SubmissionOutcomeUnknown(reason: str)` — conjunto cerrado idéntico a `_VALID_OUTCOME_UNKNOWN_REASONS` (3.83)
+- **Sin `execution_order_id` en ningún outcome** (ADR-015 D3 los lista sin él: el coordinador aporta X): por tanto, para cada par, `campos(payload) == campos(outcome) ∪ {"execution_order_id"}` y las validaciones de cada campo son idénticas (int estricto con `bool` rechazado, no-negativo; `str` no vacío ni sólo espacios; guardas de `110072`).
+- **Sin importar el módulo del Ledger**: el conjunto de razones se duplica en el módulo de outcomes (mismo criterio que los helpers duplicados de 3.94); la igualdad con el conjunto del Ledger se fija del lado del test. Ambos módulos son domain-only (se agregan a `_DOMAIN_ONLY_MODULES`; cero import `Bybit*`).
+- **Contrato de excepciones documentado en el Protocol** (lo implementa [f]): transporte, respuesta malformada, `ret_code` no clasificado y `orderLinkId` no coincidente se **devuelven** como `SubmissionOutcomeUnknown`, nunca como excepción; un request no representable localmente, antes de cualquier red, levanta `ExecutionRequestNotSupportedError`; los errores de programación se propagan sin envolver (ADR-001A, ADR-015 D9).
+
+**D3 — Fuera de alcance de 3.95:** el adapter Bybit ([f]), cualquier cambio en `bybit_gateway.py`/`BybitCreateOrderOperation`/interpreters, Writer/Reader/Lease, gate, coordinador, recovery, composition root, factories, binding de cuenta, `pyproject.toml`, PostgreSQL, OQ1/OQ2.
+
+**D4 — Criterios de aceptación de 3.95:** (1) producción limitada a dos módulos nuevos (p. ej. `order_submission_port.py`, `order_submission_outcome_contracts.py`) + exports aditivos en `__init__.py`; todo lo demás byte-idéntico; (2) isomorfismo campo a campo y de validación entre cada outcome y su payload, verificado por test y por fuzzing diferencial propio de la auditoría; (3) igualdad del conjunto de razones con el del Ledger, fijada por test; (4) pureza domain-only (AST) y `runtime_checkable`; (5) batería de mutación con inyección **después** de la validación y atribución causal por test (lección de 3.94), 0 supervivientes no equivalentes; (6) suite verde.
+
+**D5 — Mutaciones mínimas exigidas:** quitar la guarda `110072` de `SubmissionRejected`; aceptar cualquier `ret_code` en `SubmissionIdentityDuplicate`; aceptar `bool` como `ret_code`/`server_time_ms`; aceptar `server_time_ms` negativo; aceptar `exchange_order_id`/`ret_msg` vacíos o sólo espacios; ampliar o normalizar (`strip`/`lower`) el conjunto de razones; agregar un campo oculto con default (p. ej. `should_retry`, `execution_order_id`); herencia cruzada entre outcomes (p. ej. `SubmissionIdentityDuplicate` hereda de `SubmissionRejected`); quitar `@runtime_checkable`; import `Bybit*` en cualquiera de los dos módulos; export eliminado; sobrescritura post-validación de cada campo (preservación literal con fixtures no-default).
+
+**D6 — Orden recomendado después de 3.95:** [f] adapter Bybit (siguiente implementable sin OQ) → decisión OQ2 → [c]+[g] Writer/Reader/Lease → [h] gate → [i]∥[j] recovery y coordinador con dobles → decisión OQ1 → [k] composition root + binding + activación. OQ1 y OQ2 pueden decidirse en cualquier momento antes de su nodo; no bloquean 3.95 ni [f].
+
+### NOT IMPLEMENTED
+
+Nada. Ni el puerto, ni los outcomes, ni el adapter, ni ningún otro nodo. `platform/` y `tests/` byte-idénticos.
+
+**Archivos de producción modificados:** ninguno. **Tests:** ninguno. **Suite:** 7109 passing, sin cambio.
+**Hito 3.95 SELECCIONADO — contrato `OrderSubmissionPort` + `OrderSubmissionOutcome` (nodo [b]); pendiente de implementación.**
