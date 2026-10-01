@@ -14,6 +14,8 @@ import execution_gateway.canonical_execution_decimal as canonical_execution_deci
 import execution_gateway.contracts as contracts_module
 import execution_gateway.execution_infrastructure_error as execution_infrastructure_error_module
 import execution_gateway.execution_request_not_supported_error as execution_request_not_supported_error_module
+import execution_gateway.order_submission_outcome_contracts as order_submission_outcome_contracts_module
+import execution_gateway.order_submission_port as order_submission_port_module
 import execution_gateway.factory as factory_module
 import execution_gateway.gateway as gateway_module
 from execution_gateway.bybit_api_error import BybitApiError
@@ -36,6 +38,8 @@ _DOMAIN_ONLY_MODULES = (
     execution_request_not_supported_error_module,
     factory_module,
     canonical_execution_decimal_module,
+    order_submission_outcome_contracts_module,
+    order_submission_port_module,
 )
 
 _KNOWN_EXCHANGE_NAMES = ("Bybit", "Binance", "OKX", "Hyperliquid")
@@ -106,7 +110,8 @@ class TestOnlyTheAdapterKnowsBybitTypes:
     def test_no_other_domain_module_imports_bybit_create_order_types(self):
         for module_name in (
             "gateway", "contracts", "dry_run_gateway", "fake_gateway", "factory",
-            "canonical_execution_decimal",
+            "canonical_execution_decimal", "order_submission_outcome_contracts",
+            "order_submission_port",
         ):
             module = __import__(f"execution_gateway.{module_name}", fromlist=[module_name])
             src = inspect.getsource(module)

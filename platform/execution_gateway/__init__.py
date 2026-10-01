@@ -272,6 +272,14 @@ from execution_gateway.economic_comparison_contracts import (
 )
 from execution_gateway.economic_comparator import compare_attempted_order_to_observed_economics
 from execution_gateway.canonical_execution_decimal import canonical_execution_decimal
+from execution_gateway.order_submission_outcome_contracts import (
+    OrderSubmissionOutcome,
+    SubmissionAccepted,
+    SubmissionRejected,
+    SubmissionIdentityDuplicate,
+    SubmissionOutcomeUnknown,
+)
+from execution_gateway.order_submission_port import OrderSubmissionPort
 
 __all__ = [
     "__version__",
@@ -471,4 +479,10 @@ __all__ = [
     "EconomicComparisonResult",
     "compare_attempted_order_to_observed_economics",
     "canonical_execution_decimal",
+    "OrderSubmissionOutcome",
+    "SubmissionAccepted",
+    "SubmissionRejected",
+    "SubmissionIdentityDuplicate",
+    "SubmissionOutcomeUnknown",
+    "OrderSubmissionPort",
 ]
