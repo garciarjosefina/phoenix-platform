@@ -280,6 +280,10 @@ from execution_gateway.order_submission_outcome_contracts import (
     SubmissionOutcomeUnknown,
 )
 from execution_gateway.order_submission_port import OrderSubmissionPort
+from execution_gateway.bybit_order_submission_response_interpreter import (
+    BybitOrderSubmissionResponseInterpreter,
+)
+from execution_gateway.bybit_order_submission_adapter import BybitOrderSubmissionAdapter
 
 __all__ = [
     "__version__",
@@ -485,4 +489,6 @@ __all__ = [
     "SubmissionIdentityDuplicate",
     "SubmissionOutcomeUnknown",
     "OrderSubmissionPort",
+    "BybitOrderSubmissionResponseInterpreter",
+    "BybitOrderSubmissionAdapter",
 ]
