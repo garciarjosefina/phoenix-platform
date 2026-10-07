@@ -822,3 +822,38 @@ Implements exclusively the eighth ledger event type, already frozen by ADR-012 (
 **Frozen as ACCEPTED:** `OrderSubmissionPort` + `SubmissionAccepted` / `SubmissionRejected` / `SubmissionIdentityDuplicate` / `SubmissionOutcomeUnknown`: no outcome carries `execution_order_id`; 4/4 isomorphic to the ledger payloads once `execution_order_id` is added; `110072` excluded from Rejected and mandatory in Duplicate; Unknown reasons identical to the ledger's; literal preservation; strict `bool`-vs-`int`; synchronous `@runtime_checkable` Protocol; domain-only; public package exports; no concrete Port implementation yet; no productive coupling to the Ledger.
 
 **Hito 3.95 is now ACCEPTED — the last accepted code hito.** Hito 3.94 remains accepted and frozen; ADR-016 is intact; OQ1 and OQ2 remain open. **Node [f] is unblocked.** Next candidate: **Hito 3.96 — an enriched Bybit adapter implementing `OrderSubmissionPort`**, able to preserve `exchange_order_id`/`server_time_ms` (Accepted), `ret_code`/`ret_msg`/`server_time_ms` (Rejected), `ret_code=110072`/`ret_msg`/`server_time_ms` (Duplicate) and `reason` (Unknown) — with no Writer, no Coordinator, no Recovery, no HALT, no Postgres. Not implemented in this closure.
+
+## 29. Bybit Order Submission Adapter (Hito 3.96 — IMPLEMENTED, pending independent adversarial audit)
+
+Node [f] of the ADR-015 DAG, as selected by ADR-016 D6. Implements `OrderSubmissionPort` (accepted in 3.95) for Bybit. Hito 3.95 remains the last accepted code hito; 3.96 is not accepted until its own independent audit.
+
+**Why it exists.** ADR-015 F3: the accepted `ExecutionGateway.execute() -> ExecutionResult` path loses `server_time_ms` and `ret_code`, so no ledger fact can be built from it. The loss is not in the transport or the parser — `BybitResponse` already carries `ret_code`, `ret_msg`, `result` and `time_ms` after `BybitResponseParser` — but in `BybitCreateOrderResponseInterpreter`, which drops `time_ms` and turns every `ret_code != 0` into an exception. The new path replaces only that interpreter; the legacy gateway, operation, client and interpreter are byte-identical.
+
+**Modules (no existing component changed; `__init__.py` +6/−0).**
+- `bybit_order_submission_response_interpreter.py` — `BybitOrderSubmissionResponseInterpreter.interpret(*, response: BybitResponse, expected_order_link_id: str) -> OrderSubmissionOutcome`. Pure and stateless: no network, clock, ledger or identity types.
+- `bybit_order_submission_adapter.py` — `BybitOrderSubmissionAdapter(payload_builder, endpoint_executor, response_interpreter).submit(request: ExecutionRequest) -> OrderSubmissionOutcome`. Reuses the accepted `BybitCreateOrderPayloadBuilder` and `BybitEndpointExecutor` (auth, signing, URL, HTTP and JSON stay in the existing stack), the same economic mapping as the legacy gateway, and `canonical_execution_decimal` (3.92) as the only `float -> Decimal` authority. No factory and no composition-root wiring: the adapter is not activated anywhere.
+
+**Order identity (checked before any code).** The Port takes only `ExecutionRequest`, but `ExecutionRequest.order_id` already carries the Phoenix identity (ADR-015 D7 step 3: the coordinator validates it as a strict `ExecutionOrderId`) and is sent verbatim as `orderLinkId`, exactly as in the accepted gateway. The adapter generates, derives or substitutes no identity and never uses `exchange_order_id` in its place.
+
+**Mapping.**
+
+| Remote evidence | Outcome |
+|---|---|
+| `ret_code == 0`, valid `orderId`/`orderLinkId`, `orderLinkId == request.order_id` | `SubmissionAccepted(exchange_order_id=orderId literal, server_time_ms=BybitResponse.time_ms)` |
+| `ret_code ∈ {10001, 110003, 110004, 110007}` | `SubmissionRejected(ret_code, ret_msg literal, time_ms)` |
+| `ret_code == 110072` | `SubmissionIdentityDuplicate(110072, ret_msg literal, time_ms)` — never Rejected/Accepted/Unknown/exception |
+| any other `ret_code` | `Unknown(ambiguous_business_response)` |
+| `orderLinkId` differs from the request's | `Unknown(identity_mismatch)` |
+| `result` not a mapping, keys missing, or `orderId`/`orderLinkId` invalid | `Unknown(malformed_response)` |
+| blank `ret_msg` on a classified Rejected/Duplicate code | `Unknown(malformed_response)` (a message cannot be fabricated; the outcome contracts forbid blank ones) |
+| `OSError` from the call | `Unknown(transport_failure)` |
+| `BybitResponseProcessingError` from the call | `Unknown(malformed_response)` |
+| anything else (programming error / broken invariant) | propagates unwrapped (ADR-001A, ADR-015 D9) |
+
+**Transport taxonomy (inspected, not assumed).** `UrllibHttpTransport.post` surfaces `urllib.error.HTTPError`/`URLError`, `TimeoutError`/`socket.timeout`, `ConnectionError` and other `OSError` subclasses; `BybitPrivateApi` translates `UnicodeDecodeError`, and the parser translates invalid JSON/schema, into `BybitResponseProcessingError`. Exactly those two types are caught, around the remote call only (interpretation is outside the `try`), with no broad `except`. Known-not-sent cannot be distinguished from possibly-sent at this layer, so all `OSError` collapse into `transport_failure` (ADR-011 D7). **Documented limitation:** `http.client.HTTPException` (`IncompleteRead`, `BadStatusLine`, …) is not an `OSError` and propagates; widening the set requires an explicit decision, and the current test pins the behavior without endorsing it.
+
+**Exactly one remote call per `submit`.** One call site, no loops, no retry state; a timeout, a rejection or a duplicate never triggers a second request. A request that cannot be represented (`order_id` longer than 36, non-finite quantity/price) raises `ExecutionRequestNotSupportedError` with zero calls to the transport. All four `reason` values are producible by this adapter.
+
+**Evidence.** 302 new tests (suite 7353 → 7655): response-to-outcome matrix, full-stack tests with only `HttpTransport.post` faked, wire-level payload parity against the legacy gateway on ten distinct requests, a response `time` deliberately different from the authentication timestamp, `orderId != orderLinkId`, literal preservation of `ret_msg`/`orderId`/`symbol`, and AST guarantees (no ledger/identity import, single call site, no loops, only the two handlers). Own differential probe: 46,656 `BybitResponse` × expected-link combinations against an independent oracle, plus building the matching ledger event from `outcome + synthetic ExecutionOrderId` with identity-preserving fields — 0 discrepancies. Implementer's mutation battery (not canonical until audit): 73 mutants, all non-equivalent ones killed causally; two initial survivors exposed real gaps (`symbol.upper()`, hidden state on the interpreter) and were closed with discriminating tests; four equivalents remain (`orderId or orderLinkId` since `BybitCreateOrderResult` guarantees a non-empty `orderId`; three `ret_code`/`time_ms` coercions already forbidden by `BybitResponse`).
+
+**Not implemented (scope).** Ledger events or append, Writer/Reader/Lease, gate, coordinator, recovery, HALT, Postgres, composition root or activation factory, account binding, retry policy, OQ1, OQ2. ADR-016 and `decisions.md` are untouched.
