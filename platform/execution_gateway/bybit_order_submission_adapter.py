@@ -1,3 +1,5 @@
+import http.client
+
 from execution_gateway.bybit_create_order_payload_builder import BybitCreateOrderPayloadBuilder
 from execution_gateway.bybit_create_order_request import BybitCreateOrderRequest
 from execution_gateway.bybit_endpoint_executor import BybitEndpointExecutor
@@ -40,9 +42,13 @@ class BybitOrderSubmissionAdapter:
     - un request no representable, detectado ANTES de cualquier red, levanta
       `ExecutionRequestNotSupportedError` (cero llamadas al transporte);
     - todo resultado remoto -- conocido o ambiguo -- se DEVUELVE como outcome;
-    - fallos de red (`OSError`, que incluye timeouts, DNS, reset y
-      `urllib.error.HTTPError`/`URLError`) ⇒ `Unknown(transport_failure)`,
-      sin discriminar known-not-sent (ADR-011 D7);
+    - fallos de transporte ⇒ `Unknown(transport_failure)`, sin discriminar
+      known-not-sent (ADR-011 D7, ADR-015 D9): `OSError` (timeouts, DNS,
+      reset, `urllib.error.HTTPError`/`URLError`, `RemoteDisconnected`) Y
+      `http.client.HTTPException` (`BadStatusLine`, `IncompleteRead`,
+      `LineTooLong`, ...), que NO hereda de `OSError` y puede surgir DESPUÉS
+      de que el servidor recibió la orden completa (respuesta incompleta o
+      inválida);
     - respuesta recibida pero no procesable (`BybitResponseProcessingError`)
       ⇒ `Unknown(malformed_response)`;
     - cualquier otra excepción (defecto de programación o invariante rota)
@@ -83,13 +89,14 @@ class BybitOrderSubmissionAdapter:
         payload = self._payload_builder.build(request=bybit_request)
 
         # Única llamada remota. Sólo se capturan fallos concretos y conocidos
-        # de transporte/respuesta -- nunca `Exception`.
+        # de transporte/respuesta -- nunca `Exception`. `HTTPException` no es
+        # `OSError` y puede ocurrir tras el envío completo del request.
         try:
             response = self._endpoint_executor.execute(
                 endpoint=BYBIT_CREATE_ORDER_ENDPOINT,
                 payload=payload,
             )
-        except OSError:
+        except (OSError, http.client.HTTPException):
             return SubmissionOutcomeUnknown(reason="transport_failure")
         except BybitResponseProcessingError:
             return SubmissionOutcomeUnknown(reason="malformed_response")

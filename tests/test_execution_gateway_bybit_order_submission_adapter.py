@@ -288,6 +288,22 @@ _OS_ERRORS = [
 _OS_ERROR_IDS = [type(e).__name__ + f"-{i}" for i, e in enumerate(_OS_ERRORS)]
 
 
+_HTTP_CLIENT_ERRORS = [
+    http.client.BadStatusLine("GARBAGE"),
+    http.client.IncompleteRead(b"partial", 100),
+    http.client.IncompleteRead(b""),
+    http.client.LineTooLong("header line"),
+    http.client.HTTPException("generic"),
+    http.client.ImproperConnectionState("state"),
+    http.client.CannotSendRequest("cannot send"),
+    http.client.ResponseNotReady("not ready"),
+    http.client.UnknownProtocol("HTTP/9"),
+    http.client.NotConnected("nc"),
+    http.client.InvalidURL("bad url"),
+]
+_HTTP_CLIENT_ERROR_IDS = [type(e).__name__ + f"-{i}" for i, e in enumerate(_HTTP_CLIENT_ERRORS)]
+
+
 class TestTransportFailures:
     @pytest.mark.parametrize("error", _OS_ERRORS, ids=_OS_ERROR_IDS)
     def test_network_errors_are_transport_failure_after_exactly_one_call(self, error):
@@ -295,6 +311,29 @@ class TestTransportFailures:
         outcome = _adapter(spy).submit(_request())
         assert outcome == SubmissionOutcomeUnknown(reason="transport_failure")
         assert len(spy.calls) == 1
+
+    @pytest.mark.parametrize("error", _HTTP_CLIENT_ERRORS, ids=_HTTP_CLIENT_ERROR_IDS)
+    def test_http_client_exceptions_are_transport_failure_after_exactly_one_call(self, error):
+        # `HTTPException` NO hereda de `OSError` (salvo `RemoteDisconnected`) y puede
+        # surgir DESPUÉS de que el servidor recibió la orden completa (ADR-015 D9).
+        spy = _SpyExecutor(error)
+        outcome = _adapter(spy).submit(_request())
+        assert outcome == SubmissionOutcomeUnknown(reason="transport_failure")
+        assert len(spy.calls) == 1
+
+    @pytest.mark.parametrize("error", _HTTP_CLIENT_ERRORS, ids=_HTTP_CLIENT_ERROR_IDS)
+    def test_http_client_exceptions_do_not_trigger_a_second_call(self, error):
+        spy = _SpyExecutor(error, _response())
+        _adapter(spy).submit(_request())
+        assert len(spy.calls) == 1
+        assert len(spy._behaviors) == 1
+
+    def test_the_http_client_family_is_not_part_of_oserror_except_remote_disconnected(self):
+        # Precondición real de la jerarquía: documenta por qué el catch explícito es necesario.
+        assert not issubclass(http.client.HTTPException, OSError)
+        for cls in (http.client.BadStatusLine, http.client.IncompleteRead, http.client.LineTooLong):
+            assert not issubclass(cls, OSError)
+        assert issubclass(http.client.RemoteDisconnected, OSError)
 
     def test_response_processing_error_is_malformed_response(self):
         spy = _SpyExecutor(BybitResponseProcessingError(message="Bybit response could not be processed"))
@@ -332,16 +371,27 @@ class TestProgrammingErrorsPropagate:
         assert caught.value is error
         assert len(spy.calls) == 1
 
-    def test_http_client_exceptions_that_are_not_oserror_propagate_documented_limitation(self):
-        # LIMITACIÓN DOCUMENTADA (3.96): `_TRANSPORT_FAILURES` de ADR-011 D7 es
-        # `(OSError, BybitResponseProcessingError)`. `http.client.HTTPException`
-        # (p. ej. `IncompleteRead`, `BadStatusLine`) NO es `OSError`: se propaga
-        # sin envolver (X queda `Attempted` sin resultado, igual que tras un
-        # crash, ADR-015 D9/I20). Ampliar el conjunto exige una decisión
-        # explícita; este test fija el comportamiento actual, no lo promueve.
-        error = http.client.IncompleteRead(b"partial")
-        with pytest.raises(http.client.IncompleteRead):
+    def test_programming_error_before_the_call_propagates_with_zero_remote_calls(self):
+        class _BrokenBuilder(BybitCreateOrderPayloadBuilder):
+            def build(self, *, request):
+                raise ValueError("local logic bug")
+
+        spy = _SpyExecutor(_response())
+        adapter = BybitOrderSubmissionAdapter(
+            payload_builder=_BrokenBuilder(), endpoint_executor=spy,
+            response_interpreter=BybitOrderSubmissionResponseInterpreter(),
+        )
+        with pytest.raises(ValueError):
+            adapter.submit(_request())
+        assert spy.calls == []
+
+    def test_a_local_valueerror_is_not_confused_with_a_transport_failure(self):
+        # `ValueError` NO es `OSError` ni `HTTPException`: aun surgiendo de la
+        # llamada remota (p. ej. un bug del executor) se propaga.
+        error = ValueError("local unexpected")
+        with pytest.raises(ValueError) as caught:
             _adapter(_SpyExecutor(error)).submit(_request())
+        assert caught.value is error
 
     def test_programming_error_in_the_interpreter_propagates(self):
         class _BrokenInterpreter(BybitOrderSubmissionResponseInterpreter):
@@ -560,6 +610,20 @@ class TestEndToEndThroughTheRealStack:
         assert adapter.submit(_request()) == SubmissionOutcomeUnknown(reason="transport_failure")
         assert len(transport.calls) == 1
 
+    @pytest.mark.parametrize("error", _HTTP_CLIENT_ERRORS, ids=_HTTP_CLIENT_ERROR_IDS)
+    def test_http_client_exceptions_through_the_stack_are_transport_failure_with_one_call(self, error):
+        adapter, transport = _full_stack_adapter(error)
+        assert adapter.submit(_request()) == SubmissionOutcomeUnknown(reason="transport_failure")
+        assert len(transport.calls) == 1
+
+    @pytest.mark.parametrize("error", [ValueError("bug"), AssertionError("bug"), KeyError("bug"), RuntimeError("bug")],
+                             ids=lambda e: type(e).__name__)
+    def test_programming_errors_from_the_transport_propagate_through_the_stack(self, error):
+        adapter, transport = _full_stack_adapter(error)
+        with pytest.raises(type(error)):
+            adapter.submit(_request())
+        assert len(transport.calls) == 1
+
     def test_programming_error_from_the_transport_propagates_with_one_call(self):
         adapter, transport = _full_stack_adapter(TypeError("transport bug"))
         with pytest.raises(TypeError):
@@ -639,9 +703,11 @@ class TestStructuralGuarantees:
                  and isinstance(n.func, ast.Attribute) and n.func.attr == "execute"]
         assert len(calls) == 1
 
-    def test_only_the_two_known_failure_types_are_caught(self):
+    def test_only_the_known_transport_failure_types_are_caught(self):
         handlers = [n for n in ast.walk(_tree()) if isinstance(n, ast.ExceptHandler)]
-        assert sorted(ast.unparse(h.type) for h in handlers) == ["BybitResponseProcessingError", "OSError"]
+        assert sorted(ast.unparse(h.type) for h in handlers) == [
+            "(OSError, http.client.HTTPException)", "BybitResponseProcessingError",
+        ]
 
     def test_no_bare_or_broad_except(self):
         for h in (n for n in ast.walk(_tree()) if isinstance(n, ast.ExceptHandler)):
