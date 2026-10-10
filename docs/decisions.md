@@ -1744,3 +1744,193 @@ Nada. Ni el puerto, ni los outcomes, ni el adapter, ni ningún otro nodo. `platf
 
 **Archivos de producción modificados:** ninguno. **Tests:** ninguno. **Suite:** 7109 passing, sin cambio.
 **Hito 3.95 SELECCIONADO — contrato `OrderSubmissionPort` + `OrderSubmissionOutcome` (nodo [b]); pendiente de implementación.**
+
+
+---
+
+## ADR-017 — Resolución de ADR-015 OQ2: entorno PostgreSQL, driver, modelo de conexión/lock, schema, migraciones y estrategia de tests
+
+**Fecha:** 2026-10-09
+**Contexto:** Hito 3.97, decisión y diseño. Con [a] (3.94), [b] (3.95) y [f] (3.96) aceptados, el siguiente cuello de botella del DAG de ADR-015 D22 es OQ2 (entorno PostgreSQL + driver), que bloquea [g] y condiciona la forma de [c]. Cero producción, cero tests, cero dependencias. ADR-011…016 no se modifican; esta ADR las concreta donde dejaron decisiones al "hito de implementación".
+
+### FACT — forense del repo y del entorno (verificado, no recordado)
+
+- **F1 Python:** el intérprete local es CPython 3.14.6 (macOS 14.4.1, arm64). `pyproject.toml` declara `requires-python = ">=3.12"`, build `setuptools>=68`, **ninguna** sección `dependencies` ni extras. No hay `requirements*.txt`, ni lockfile, ni CI (`.github/` no existe), ni scripts de test (`scripts/` vacío).
+- **F2 Dependencias instaladas:** sólo `pytest` 9.1.1 y `pytest-randomly` 5.0.0 relevantes; **ningún** driver SQL (`psycopg`, `psycopg2`, `asyncpg`, `pg8000`), ORM (`SQLAlchemy`), framework de migraciones (`alembic`) ni infraestructura de test de bases (`testcontainers`, `pytest-postgresql`).
+- **F3 Persistencia en el código:** no existe ningún módulo SQL, abstracción de base de datos, advisory lock ni persistencia. Las únicas menciones de "PostgreSQL" en `platform/` son comentarios de alcance negativo (lookups 3.86/3.88). El Ledger (ADR-010) sólo existe como contratos en memoria.
+- **F4 Entorno local:** **no** hay `docker`, `psql`, `postgres`, `pg_ctl`, `initdb` ni Homebrew. Nada de Testcontainers ni de un PostgreSQL de sistema es utilizable sin instalar software.
+- **F5 Railway:** `railway.toml` sólo describe el servicio histórico del smoke test (`buildCommand = "python3 -m pip install ."`, `startCommand` del smoke runner, `restartPolicyType = "NEVER"`); ese servicio fue eliminado (`handoff.md`). No hay servicio PostgreSQL declarado. D-014 registra la deuda de `PYTHONPATH`/Railpack.
+- **F6 Patrón de configuración:** los loaders de entorno (`bybit_demo_execution_config_env_loader.py`, `*_env_bootstrap.py`) leen `os.environ` (o un mapping inyectado), validan y fallan cerrados; es el precedente a reutilizar para la URL de conexión.
+- **F7 PyPI (metadatos consultados sólo en lectura, sin instalar):** `psycopg` 3.3.6 / `psycopg-binary` 3.3.6 (2026-09-18, wheels cp314 para manylinux x86_64 y macOS arm64, Python ≥3.10) y `psycopg-pool` 3.3.3; `psycopg2-binary` 2.9.13 (cp314 disponible); `asyncpg` 0.32.0; `SQLAlchemy` 2.1.4; `alembic` 1.20.0; `testcontainers` 4.15.0 (requiere Docker); `pytest-postgresql` 9.1.1 (requiere binarios PostgreSQL locales); `pixeltable-pgserver` 0.6.0 (servidor PostgreSQL real empaquetado como wheel, cp314 para macOS arm64 y manylinux, mantenido por una empresa desde 2024, 16 releases); `embedded-postgres` 18.6.3 (fork de un mes, un solo autor).
+- **F8 Requisitos ya fijados por ADRs aceptadas** (fuente de la tabla de abajo): ADR-011 D1-D5, D12-D15 y su Resolución del STOP (PostgreSQL de Railway como servicio separado; `synchronous_commit=on`; `pg_advisory_xact_lock` por cuenta en la transacción del append; `REVOKE UPDATE, DELETE`; URL desde entorno sin loguearla; `psycopg` 3 candidato); ADR-015 D4, D13, D14 (lease de sesión por cuenta, reentrante con el lock del append), D16 (índice único parcial que excluye `OrderObservedOpen`; colisión por contenido estable), D18 (consultas q1-q4), D20 (C1-C10), D21.
+
+### Requisitos derivados → mecanismo concreto
+
+| Req. | Origen | Mecanismo que lo satisface |
+|---|---|---|
+| A commit durable antes del `AppendReceipt` | ADR-011 D1/D2, ADR-015 D4 | transacción explícita; `SET LOCAL synchronous_commit = on` dentro de cada append; el receipt se construye sólo después de que `COMMIT` retorna; preflight de arranque que exige `SHOW fsync = on` |
+| B DB no disponible ⇒ sin orden remota | ADR-011 D6, ADR-015 D4/D13 | errores de conexión/operación ⇒ excepción tipada del Writer/Lease; sin receipt el coordinador no llama al Port; commit con resultado incierto (conexión perdida durante `COMMIT`) ⇒ error de append, nunca receipt |
+| C `sequence` monótono por cuenta | ADR-011 D4, ADR-015 D15 | dentro de la transacción y bajo el lock xact de la cuenta: `max(sequence)+1`; `UNIQUE (execution_account_id, sequence)` como red de seguridad |
+| D `event_id` generado por el Writer | ADR-011 D2/D3 | `str(uuid.uuid4())` en el Writer, columna `uuid` |
+| E append transaccional | ADR-011 D2 | una transacción por append (lock xact + secuencia + chequeo de colisión + `INSERT … RETURNING`) |
+| F serialización interna del append | ADR-011 res. STOP 3 | `pg_advisory_xact_lock(k)` con la misma clave `k` que la lease (se mantiene: defensa en profundidad y asignación de `sequence` aunque un caller olvide la lease) |
+| G lease de cuenta sobre toda la sección crítica | ADR-015 D14 | `pg_advisory_lock(k)` de **sesión**, en una conexión dedicada |
+| H lease a través de varias transacciones | ADR-015 D14 | los locks de sesión sobreviven a `COMMIT`; la conexión de la lease queda en autocommit con bloques `transaction()` explícitos, nunca "idle in transaction" |
+| I exclusión real entre procesos/workers | ADR-015 D14/C10 | el lock vive en el servidor PostgreSQL, no en el proceso |
+| J rollback correcto | ADR-011 D2 | `with conn.transaction():` — cualquier excepción ⇒ `ROLLBACK`; los locks xact se liberan con la transacción |
+| K pérdida de conexión libera la lease | ADR-015 D14/C8 | el backend libera los locks de sesión al terminar; keepalives TCP de libpq para detectar pares muertos; **prohibido** reconectar en silencio dentro de una lease |
+| L idempotencia/colisión | ADR-011 D5, ADR-015 D16 | índice único parcial + `INSERT`; ante `UniqueViolation` ⇒ leer el existente, decodificar y comparar contenido estable: igual ⇒ receipt existente; distinto ⇒ error de integridad |
+| M unicidad parcial para `ObservedOpen` | ADR-015 D16(a) | `CREATE UNIQUE INDEX … WHERE event_type <> 'OrderObservedOpen'` |
+| N comparación de contenido estable | ADR-012 C2/C3, ADR-015 D16(b) | codec determinista (abajo); comparación de dataclasses decodificadas excluyendo `server_time_ms` |
+| O Reader determinista | ADR-011 D13, ADR-015 D18 | lecturas ordenadas por `(execution_account_id, sequence)`; índice `(execution_account_id, execution_order_id, sequence)`; decodificación re-validante |
+| P tests contra PostgreSQL real | ADR-011 STOP (opción C descartada), ADR-015 D4 | nivel de integración contra un servidor PostgreSQL real (abajo); ningún mock de SQL cuenta como evidencia de [g] |
+| Q Railway como destino de despliegue, no único entorno de test | ADR-011 res. STOP | tests de integración locales y reproducibles; validación Railway separada en [k] |
+
+### DECISION
+
+**D1 — Driver: `psycopg` 3, API síncrona, distribución `psycopg[binary]`, rango `>=3.3,<3.4`.**
+- *psycopg 3* (elegido): API síncrona nativa (el Port, el adapter y el futuro coordinador son síncronos); transacciones explícitas (`conn.transaction()`), autocommit controlado por conexión, parámetros del lado del servidor, `Decimal`↔`numeric` exacto, adaptación de `uuid`, JSON/JSONB, taxonomía de errores por SQLSTATE (`psycopg.errors.UniqueViolation`, `LockNotAvailable`, `QueryCanceled`, `OperationalError`), tipado, mantenido activamente, wheel `psycopg-binary` con libpq incluida para cp310-cp314 en manylinux y macOS arm64 (F7) — evita depender de libpq del sistema en Railpack (D-014) y en el Mac sin Homebrew (F4). Una conexión nunca reconecta sola: exactamente la semántica que exige el lease (K).
+- *psycopg2*: en mantenimiento, sin API moderna de transacciones ni tipado; nada que aporte frente a 3.
+- *asyncpg*: excelente pero **sólo async**; introducir un event loop en la persistencia crearía una frontera async/sync gratuita frente a un Port, un adapter y un coordinador síncronos, sin necesidad de throughput (órdenes por minuto, ADR-011 D12). Rechazado.
+- *pg8000*: puro Python, sin wheels específicos; menor madurez en advisory locks/errores; sin ventaja.
+- `psycopg` es la **primera dependencia runtime** de `pyproject.toml` (ADR-011 res. STOP 5); se agrega en el hito que la usa por primera vez (D12), no en éste.
+
+**D2 — Sin ORM: SQL explícito vía el driver.** Lo que este bounded context necesita probar — advisory locks de sesión vs transacción, índice único parcial, `SET LOCAL synchronous_commit`, orden exacto de sentencias dentro de una transacción, manejo de `UniqueViolation` — es precisamente lo que un ORM abstrae o difiere (unidad de trabajo, flush implícito, pooling propio). SQLAlchemy/Alembic se rechazan para V1: añadirían dependencias y una capa que esconde las garantías. Todo el SQL vive en un único módulo infra por componente, con sentencias literales parametrizadas (nunca interpolación de strings).
+
+**D3 — Modelo de conexión: una conexión dedicada por lease de cuenta ("sesión de cuenta").**
+1. `AccountExecutionLease.acquire(execution_account_id)` abre **una conexión nueva** (autocommit a nivel de sesión), ejecuta `SET lock_timeout` acotado (OQ3) y `SELECT pg_advisory_lock(k)`. Fallo de conexión o `LockNotAvailable` ⇒ excepción tipada; sin lease no hay gate, ni append, ni orden (fail-closed).
+2. La lease devuelve un **handle de sesión de cuenta** que posee esa conexión. Writer y Reader, **mientras exista una lease**, operan **sobre esa misma conexión** — es la única forma de que el lock xact del append sea reentrante con el lock de sesión (ADR-015 D14): un append desde otra conexión esperaría el lock de sesión retenido por la propia lease y se auto-bloquearía hasta `lock_timeout`. Este requisito **forma parte del contrato [c]**: los Protocols de Writer/Reader se vinculan a una sesión de cuenta, no a un pool global.
+3. Secuencia del coordinador: adquirir lease → gate (lecturas) → append `Attempted` (transacción 1, commit) → **llamada remota con la conexión abierta pero sin transacción abierta** (la conexión queda *idle*, no *idle in transaction*: no retiene snapshots, no bloquea VACUUM) → append del resultado (transacción 2, commit) → liberar lease (`pg_advisory_unlock(k)`, luego cerrar la conexión). El recovery usa el mismo esquema.
+4. Si la conexión muere en cualquier punto: el servidor libera el lock de sesión; el handle queda **inválido para siempre** (nunca reconecta); cualquier operación posterior falla con un error de lease perdida; el append del resultado no ocurre ⇒ X queda `Attempted` sin resultado ⇒ ADR-015 D12/D13 (emergencia, cuenta bloqueada por derivación, recovery). Si el proceso muere: el SO cierra el socket, el backend termina y libera el lock. Partición de red: keepalives TCP de libpq (`keepalives`, `keepalives_idle`, `keepalives_interval`, `keepalives_count` — valores en OQ3) acotan cuánto tarda el servidor en liberar un lock de un cliente desaparecido; mientras tanto, otros procesos no obtienen la lease ⇒ no colocan órdenes (fail-closed, nunca doble actor).
+5. **Ambos locks se conservan**: el de sesión (lease, sección crítica completa, D14) y el transaccional (append, ADR-011 res. STOP 3) sobre la **misma clave**. El xact es redundante cuando la lease se respeta, y es lo que preserva la monotonía de `sequence` si un caller futuro omitiera la lease (en ese caso esperaría a la lease ajena: exclusión correcta, nunca corrupción).
+6. Fuera de una lease (p. ej. herramientas de lectura), el Reader puede abrir una conexión de corta vida; el Writer **no** se expone fuera de una sesión de cuenta en producción.
+
+**D4 — Sin pool en V1.** Una conexión por lease, abierta al adquirir y cerrada al liberar. Un pool introduciría el único riesgo grave de este modelo — devolver al pool una conexión con un lock de sesión todavía tomado — a cambio de un throughput innecesario (órdenes por minuto, cuentas contadas). Si un hito futuro lo justifica con medición: `psycopg_pool` con `reset` que ejecute `SELECT pg_advisory_unlock_all()` y `check` de salud, y nunca compartiendo una conexión con lease activa — decisión diferida, no TBD de V1.
+
+**D5 — Clave de lock: un `bigint` derivado de SHA-256 con separación de dominio y versión.** `k = int.from_bytes(sha256(b"phoenix:execution-account-lease:v1:" + execution_account_id.value.encode("utf-8")).digest()[:8], "big", signed=True)`, usada idéntica en `pg_advisory_lock(k)` y `pg_advisory_xact_lock(k)`.
+- Determinista, estable entre procesos y reinicios (nunca `hash()` de Python, aleatorizado por proceso), sin secretos, versionado por el prefijo `v1`.
+- *Colisión:* probabilidad de que dos de `n` cuentas compartan clave ≈ n²/2⁶⁵ (n = 1.000 ⇒ ~2,7·10⁻¹⁴). Una colisión accidental **sólo provoca serialización espuria** entre esas dos cuentas: **no** permite concurrencia indebida, **no** rompe la exclusión de ninguna cuenta (cada cuenta sigue excluida consigo misma; además queda excluida con la otra) y **no** mezcla eventos ni identidades — `sequence`, unicidad, colisión de contenido y lecturas siguen siendo por `execution_account_id`, nunca por `k`. Es un riesgo de **disponibilidad/concurrencia**, no de integridad.
+- *Alternativas descartadas:* dos `int4` (`classid`, `objid`) — permite un namespace explícito pero deja 32 bits para la cuenta (n = 1.000 ⇒ ~10⁻⁴); tabla de claves explícitas — sin colisiones pero exige un registro de cuentas transaccional que hoy no existe (Account Registry, [k]); `hashtext()` del lado del servidor — 32 bits y sin garantía de estabilidad entre versiones mayores.
+- *Espacio de claves compartido:* la base del Ledger es **exclusiva de Phoenix** (D9); ningún otro sistema usa advisory locks en ella. Cambiar el algoritmo (`v2`) exige detener todos los procesos que operen la cuenta antes de desplegar el nuevo (dos algoritmos simultáneos no se excluirían).
+- La función es pura y se implementa y prueba sin base (parte de [c], D11).
+
+**D6 — Schema V1: una tabla, envelope tipado + payload JSONB.** Concreción de ADR-011 D14 con la corrección F6/D16 de ADR-015 (ilustrativo, no DDL final):
+
+```sql
+CREATE TABLE execution_ledger_events (
+    event_id             uuid     PRIMARY KEY,
+    execution_account_id text     NOT NULL CHECK (length(execution_account_id) > 0),
+    sequence             bigint   NOT NULL CHECK (sequence >= 1),
+    occurred_at_ms       bigint   NOT NULL CHECK (occurred_at_ms >= 0),
+    committed_at_ms      bigint   NOT NULL CHECK (committed_at_ms >= 0),
+    event_type           text     NOT NULL CHECK (event_type IN (<los 8 tipos aceptados>)),
+    schema_version       smallint NOT NULL CHECK (schema_version = 1),
+    execution_order_id   text     NULL,
+    payload              jsonb    NOT NULL CHECK (jsonb_typeof(payload) = 'object'),
+    UNIQUE (execution_account_id, sequence)
+);
+CREATE UNIQUE INDEX execution_ledger_events_content_key
+    ON execution_ledger_events (execution_account_id, execution_order_id, event_type)
+    WHERE event_type <> 'OrderObservedOpen';
+CREATE INDEX execution_ledger_events_order_lookup
+    ON execution_ledger_events (execution_account_id, execution_order_id, sequence);
+```
+
+- `event_id` `uuid` (valida forma; el Reader devuelve `str(uuid)` canónico, igual a lo generado por `str(uuid.uuid4())`).
+- `committed_at_ms`: **reloj del servidor PostgreSQL** (`floor(extract(epoch from clock_timestamp()) * 1000)`) evaluado dentro de la transacción del append y devuelto por `RETURNING` — un solo reloj para todos los workers; semántica exacta: "instante registrado por PostgreSQL durante la transacción del append", ≤ instante real del commit (el instante exacto del commit no es observable desde la transacción). Nunca sustituye a `occurred_at_ms` (tiempo de dominio, ADR-010 D8).
+- `execution_order_id` desnormalizado (los 8 tipos actuales lo portan; `NULL` reservado a futuros eventos no order-scoped); `event_type` = nombre de la clase concreta del payload; añadir un tipo (p. ej. el de OQ1) es una migración hacia adelante que amplía el `CHECK`.
+- **Inmutabilidad (ADR-011 D13 / res. STOP 4):** `REVOKE UPDATE, DELETE, TRUNCATE` para el **rol runtime** del Writer, que sólo tiene `SELECT, INSERT`. Hecho a verificar en [k]: la credencial por defecto de un PostgreSQL gestionado suele ser superusuario, que ignora privilegios; por eso se agregan además **triggers `BEFORE UPDATE OR DELETE` y `BEFORE TRUNCATE` que levantan error**, como defensa en profundidad — no reemplazan al `REVOKE`, cubren la conexión superusuario. Roles: `phoenix_ledger_owner` (dueño del schema, sólo migraciones) y `phoenix_ledger_writer` (runtime).
+- Sin tablas adicionales salvo la de migraciones (D8). Sin columnas de proyección, ni HALT persistido (ADR-015 D13: derivado), ni registro de cuentas.
+
+**D7 — Serialización del payload: codec propio, determinista y re-validante; `Decimal` como string.**
+- Payload = objeto JSON con exactamente los campos del dataclass (nombre de campo = clave), sin clave de tipo (el tipo vive en `event_type`). `ExecutionOrderId`/`ExecutionBotId` ⇒ su `value`; `None` ⇒ `null`; `bool` ⇒ `true/false`; `int` ⇒ número JSON entero; **`Decimal` ⇒ string `str(d)`** (representación exacta, preserva exponente y escala: `Decimal("1E-7")`, `Decimal("0.10")`), decodificado con `Decimal(s)`.
+- **Prohibido `float`** en ambas direcciones: el encoder rechaza cualquier `float`; el decoder usa `parse_float` que levanta error — un número no entero en un payload es corrupción. Nunca `Decimal → float`.
+- Decodificar reconstruye el dataclass frozen (re-ejecuta su `__post_init__`): un payload almacenado inválido, con claves de más o de menos, o con un tipo distinto ⇒ error de integridad al leer (detección de corrupción, fail-closed).
+- La comparación de contenido estable (D16) se hace sobre dataclasses decodificados, campo a campo, excluyendo `server_time_ms` donde exista — nunca sobre texto JSONB (JSONB normaliza orden de claves y espacios; no es una forma canónica de texto).
+- Alternativas: columnas tipadas por evento (8 tablas o columnas dispersas: evolución costosa, consultas por `execution_order_id`/`event_type` igual de simples con el envelope); texto JSON (pierde validación `jsonb_typeof` sin ganar nada, la comparación es igualmente sobre objetos decodificados). Elegido: envelope tipado + JSONB.
+- El codec es puro (sin base) y se implementa antes de [g] (D11).
+
+**D8 — Migraciones: SQL versionado propio + runner mínimo en Phoenix, forward-only.**
+- Archivos `NNNN_<nombre>.sql` versionados en el paquete del componente Postgres; tabla `phoenix_schema_migrations(version integer PRIMARY KEY, name text NOT NULL, sha256 text NOT NULL, applied_at timestamptz NOT NULL DEFAULT now())`.
+- El runner aplica en orden cada migración pendiente en **su propia transacción**, bajo `pg_advisory_xact_lock` de una clave fija de migraciones (derivada como D5 con otro dominio), y registra versión + SHA-256 del archivo. Verifica que los SHA-256 de las ya aplicadas coinciden con los archivos (detección de edición de historia ⇒ falla).
+- Forward-only: sin "down"; una corrección es otra migración. Revisión humana: el SQL es texto plano en el repo, auditado como cualquier código.
+- **Versión observable:** el Writer/Lease verifican al arrancar que la última versión aplicada es exactamente la esperada por el código; distinta ⇒ arranque fallido (fail-closed), nunca operar contra un schema desconocido.
+- Alembic rechazado (D2): Python + SQLAlchemy para algo que es SQL lineal.
+
+**D9 — Entorno de tests PostgreSQL: la interfaz normativa es `PHOENIX_TEST_DATABASE_URL`; el proveedor local es reemplazable.**
+- *Interfaz normativa (congelada):* los tests de integración requieren un **PostgreSQL real compatible** (≥ 16) accesible mediante `PHOENIX_TEST_DATABASE_URL`. Ése es el único contrato. Los contratos [c], el Writer, el Reader, la Lease, el schema, las migraciones y el código de producción **no dependen** de `pixeltable-pgserver`, Docker, Postgres.app, Railway ni de ningún mecanismo concreto para arrancar PostgreSQL; ningún módulo de `platform/` importa un proveedor de servidor.
+- *Proveedor local (no normativo):* `pixeltable-pgserver` es el **candidato preferido V1** para levantar localmente un servidor real (wheel para macOS arm64 y Linux, F7; sin Docker, sin root, sin Homebrew, F4), elegido sobre `embedded-postgres` por madurez. **No** es una dependencia arquitectónica congelada: sólo un medio para obtener una URL. Testcontainers queda descartado mientras no exista Docker.
+- *Acceptance gate en 4.00 (obligatorio antes de adoptarlo):* sobre CPython 3.14 / macOS ARM64, demostrar arranque y parada fiables; conexiones `psycopg`; transacciones; `pg_advisory_lock`; `pg_advisory_xact_lock`; dos conexiones y dos procesos concurrentes; reinicio; parada inmediata con semántica de crash; recuperación por WAL suficiente para los tests de D10/D11. **Si pasa:** se adopta como dependencia sólo de desarrollo/test (extra opcional, nunca runtime). **Si falla:** `PHOENIX_TEST_DATABASE_URL` sigue siendo el contrato estable y el proveedor local se reemplaza (p. ej. un PostgreSQL instalado por la usuaria, o una instancia de prueba) **sin modificar** [c], [g], Writer, Reader, Lease, schema, migraciones ni contratos; la elección del reemplazo se lleva a la directora.
+- *Niveles:* (1) *unit tests* (suite por defecto, hoy 7694): contratos, codec, clave de lock, lógica pura del runner — sin base; (2) *integración PostgreSQL* (directorio y marcador propios): una base nueva por test, independiente del orden (`pytest-randomly` activo); (3) *validación Railway* (no es la suite): en [k], lectura de parámetros (`fsync`, `synchronous_commit`, versión mayor, rol) y prueba de humo de lease/append en una base de validación; (4) *producción*: sólo el despliegue de [k].
+- *Modo REQUIRE:* `PHOENIX_REQUIRE_POSTGRES=1` es **obligatorio** en toda auditoría y aceptación de hitos de integración: sin PostgreSQL disponible en ese modo, los tests **fallan, nunca se saltan**, y se reporta el conteo. En una suite ordinaria sin ese flag, los tests de integración pueden **saltarse con motivo explícito** si no existe `PHOENIX_TEST_DATABASE_URL` ni proveedor local disponible.
+- Railway no se usa como entorno de test por defecto: dependería de red remota, credenciales en desarrollo y estado compartido, degradando la reproducibilidad.
+
+**D10 — Evidencia de durabilidad suficiente para V1.** Garantía exacta: **Phoenix V1 demuestra que PostgreSQL confirmó `COMMIT` bajo `synchronous_commit = on` y `fsync = on`, y que los datos sobreviven los escenarios de proceso, conexión y reinicio que sus tests de integración pueden ejecutar.** Nada más. Se prueba: (1) el receipt sólo existe después de un `COMMIT` exitoso y con `synchronous_commit = on` verificado dentro de la transacción; (2) preflight que rechaza operar si `fsync = off`; (3) cliente terminado tras el receipt ⇒ una conexión nueva lee el evento; (4) cliente terminado antes del `COMMIT` ⇒ el evento no existe; (5) conexión cortada durante la transacción ⇒ rollback; (6) **reinicio "crash" del servidor** (`pg_ctl stop -m immediate` y arranque) después de un receipt ⇒ el evento sigue ahí tras la recuperación por WAL — posible porque el servidor de test es local y controlado; (7) en [k], reinicio del servicio PostgreSQL de Railway como validación operativa manual. **No** se afirma tolerancia a pérdida de hardware, corrupción del volumen ni desastre a nivel del proveedor — están fuera del control del cliente (ADR-011 res. STOP 1: instancia única, sin quórum).
+
+**D11 — Matriz de concurrencia que [g] debe superar** (con dos conexiones en un proceso salvo indicación):
+
+| Caso | Expectativa | Requiere procesos separados |
+|---|---|---|
+| dos appends misma cuenta concurrentes | `sequence` 1..n sin huecos ni duplicados | no (hilos con conexiones distintas) |
+| dos appends cuentas distintas | independientes, sin espera mutua | no |
+| carrera de `sequence` (N hilos × M appends) | permutación exacta, `UNIQUE` nunca violado | no |
+| append duplicado (mismo contenido) | receipt existente, 1 fila | no |
+| misma clave, contenido distinto | error de integridad, sin escritura | no |
+| `ObservedOpen` repetido igual / distinto | ambos permitidos por el índice; la regla "sólo si cambia" la decide el caller bajo lease (ADR-015 D16c) | no |
+| lease A vs lease B misma cuenta | B espera/timeout mientras A la tiene | no |
+| liberación normal | B adquiere tras `unlock` | no |
+| liberación por cierre de conexión | B adquiere tras cerrar A | no |
+| liberación por muerte del proceso | B adquiere tras `kill -9` del proceso que tenía A | **sí** |
+| append dentro de lease desde otra conexión | bloqueo hasta `lock_timeout` (prueba del requisito D3.2) | no |
+| rollback | sin fila, `sequence` no consumida | no |
+| DB no disponible | excepción tipada, sin receipt | no (puerto cerrado) |
+| conexión perdida durante append / durante lease | sin receipt; handle de lease inválido, sin reconexión | no (`pg_terminate_backend`) |
+| Reader durante appends concurrentes | sólo eventos committeados, orden por `sequence` | no |
+| reinicio del servidor / reconexión | evento committeado presente; leases previas liberadas | no (servidor local controlado) |
+| dos workers misma cuenta | exclusión real | **sí** |
+
+**D12 — Railway (diseño objetivo; nada se crea en este hito).** PostgreSQL gestionado de Railway como servicio separado (ya decidido en ADR-011 res. STOP), en la misma región que los servicios de ejecución (EU West, D-014). Variable propia **`PHOENIX_LEDGER_DATABASE_URL`** (referencia a la URL de la red privada de Railway), cargada con el patrón fail-closed de F6 y nunca logueada (ADR-011 D15); no se reutiliza un `DATABASE_URL` genérico para no enlazar por accidente otra base. TLS: `sslmode=require` como mínimo; `verify-full` queda como deuda si el proveedor no ofrece una CA verificable (a confirmar en [k]). Migraciones: ejecutadas por el runner (D8) como comando previo al despliegue del servicio de ejecución, con la credencial de dueño; si fallan, el despliegue no avanza y el servicio anterior sigue (o ninguno arranca). Arranque: preflight (conexión, versión de schema exacta, `fsync = on`) — cualquier fallo ⇒ el servicio no abre el gate (fail-closed). DB caída en operación ⇒ sin orden (ADR-011 res. STOP 2). Versión de Python del runtime Railway y versión mayor de PostgreSQL: se fijan y verifican en el hito que agregue la dependencia / en [k] (deuda no bloqueante: todo lo usado existe en PostgreSQL ≥ 12 y `psycopg-binary` cubre cp310-cp314).
+
+**D13 — Relación con OQ1: [c] NO necesita esperar a OQ1.** Separación: (1) *primitivas de almacenamiento* (append, receipt, colisión, lease, errores) — neutrales a cualquier política; (2) *primitivas del Reader* — consultas neutrales por cuenta y por X (eventos de X en orden, existencia de un tipo para X, último evento de un tipo para X, X con `Attempted` de la cuenta) que **no** codifican qué es "resolutorio"; (3) *definición de hecho resolutorio* — política de ADR-015 D6, que vive en el Gate [h] como conjunto explícito y parametrizable; (4) *evento de resolución por operador* (OQ1) — un tipo de payload nuevo + ampliación del `CHECK` por migración + ampliación del conjunto resolutorio en [h]. Ninguno de (1)-(2) cambia con OQ1. La afirmación previa ("el conjunto resolutorio del Reader será ampliado por OQ1", ADR-016) se precisa: lo ampliado es la política del Gate, no el contrato del Reader. OQ1 sigue bloqueando sólo la activación [k].
+
+**D14 — DAG actualizado y partición en hitos pequeños:**
+
+```
+Aceptados: [a] 3.94 · [b] 3.95 · [f] 3.96 · [e] OQ2 (esta ADR)
+3.98  [c1] contratos puros: Protocols ExecutionLedgerWriter / ExecutionLedgerReader /
+           AccountExecutionLease (+ handle de sesión de cuenta), AppendReceipt, errores
+           (no disponible, append incierto/fallido, integridad/colisión, lease no adquirida,
+           lease perdida) y la función pura de clave de lock (D5). Sin dependencias.
+3.99  [c2] codec puro de payloads (D7) + comparación de contenido estable. Sin dependencias.
+4.00  [g0] primera dependencia (psycopg[binary] runtime), infraestructura de tests de
+           integración sobre PHOENIX_TEST_DATABASE_URL + modo REQUIRE (D9), acceptance gate
+           del proveedor local pixeltable-pgserver (adopción dev/test sólo si pasa),
+           runner de migraciones (D8), migración 0001 (D6: tabla, índices, roles, REVOKE,
+           triggers), preflight.
+4.01  [g1] PostgresExecutionLedgerWriter (append, sequence, synchronous_commit, colisión D16).
+4.02  [g2] PostgresExecutionLedgerReader (consultas neutrales, D13).
+4.03  [g3] PostgresAccountExecutionLease (sesión dedicada, D3; incluye pruebas multi-proceso).
+luego [h] gate → [i] ∥ [j] → OQ1 → [k] composition root + binding + activación (Railway).
+```
+
+### CONSEQUENCES
+
+- OQ2 queda resuelta: **DRIVER** = `psycopg` 3 síncrono (`psycopg[binary]>=3.3,<3.4`) · **ORM** = ninguno, SQL explícito · **POOL** = ninguno en V1 (una conexión por lease) · **MIGRATIONS** = SQL versionado propio + runner forward-only con checksum · **TEST POSTGRES** = PostgreSQL real compatible vía `PHOENIX_TEST_DATABASE_URL` (interfaz normativa); proveedor local preferido V1 `pixeltable-pgserver`, no normativo y sujeto al acceptance gate de 4.00; `PHOENIX_REQUIRE_POSTGRES=1` obligatorio en auditorías (fallo, nunca salto) · **RAILWAY POSTGRES** = servicio gestionado separado, `PHOENIX_LEDGER_DATABASE_URL`, `sslmode=require`, migraciones pre-deploy, preflight fail-closed · **PAYLOAD STORAGE** = envelope tipado + JSONB · **DECIMAL ENCODING** = string `str(Decimal)`, `float` prohibido · **LOCK MODEL** = `pg_advisory_lock` de sesión (lease, conexión dedicada) + `pg_advisory_xact_lock` en cada append, misma clave · **LOCK KEY** = SHA-256 con dominio `phoenix:execution-account-lease:v1:` truncado a `bigint` con signo (una colisión sólo serializa: riesgo de disponibilidad, no de integridad) · **SCHEMA OWNER** = Phoenix, rol `phoenix_ledger_owner` vía runner; runtime `phoenix_ledger_writer` (`SELECT, INSERT`).
+- **Precisiones a ADRs previas, sin contradecirlas:** (i) ADR-011 D14 `committed_at_ms` = reloj de PostgreSQL dentro de la transacción; (ii) ADR-011 res. STOP 4 se conserva (`REVOKE`) y se suma un trigger de defensa en profundidad por el hecho de credenciales superusuario; (iii) ADR-015 D14 "reentrante" exige misma conexión: requisito de contrato para [c]; (iv) ADR-016/ADR-015 "el Reader cambia con OQ1" se precisa en D13.
+
+### INVARIANTS
+
+Ningún receipt sin `COMMIT` con `synchronous_commit = on`; ningún módulo de `platform/` depende de un proveedor de servidor de test; ninguna reconexión silenciosa dentro de una lease; ninguna conexión con lock de sesión reutilizada por otro actor; ningún `float` en payloads; ninguna sobrescritura (`UPDATE`/`DELETE`/`TRUNCATE`) de eventos; ningún mock de SQL como evidencia de [g]; ningún arranque contra una versión de schema distinta de la esperada.
+
+### DEBTS (no bloqueantes, cada una con su hito)
+
+- Acceptance gate de `pixeltable-pgserver` (D9) en 4.00 sobre CPython 3.14 / macOS ARM64; si falla, `PHOENIX_TEST_DATABASE_URL` sigue siendo el contrato y sólo se reemplaza el proveedor local (elección llevada a la directora), sin tocar [c], [g], schema, migraciones ni contratos.
+- Versión mayor de PostgreSQL de Railway, Python de Railpack, superusuario o no de la credencial por defecto, `sslmode=verify-full`, comando pre-deploy: verificar en [k].
+- Valores de `lock_timeout`, `statement_timeout`, keepalives y timeout de conexión: OQ3, en el hito de cada componente.
+- Pool: diferido hasta que una medición lo justifique (D4).
+
+### NOT IMPLEMENTED
+
+Nada: ni dependencias, ni SQL, ni Writer/Reader/Lease, ni migraciones, ni tests. `platform/`, `tests/`, `pyproject.toml` y `railway.toml` byte-idénticos. **Suite:** 7694 passing, sin cambio. OQ1 sigue abierta.
+
+**OQ2 RESUELTA.** Próximo hito: **3.98 — contratos [c1]** (Protocols Writer/Reader/Lease, `AppendReceipt`, errores, clave de lock pura).

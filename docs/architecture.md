@@ -879,3 +879,52 @@ Node [f] of the ADR-015 DAG, as selected by ADR-016 D6. Implements `OrderSubmiss
 - **MINOR-3 (informational debt).** A 4xx/5xx `HTTPError` may carry Bybit JSON that is discarded when mapped to `transport_failure`; remote evidence may be lost, but no false terminal, no retry and no identity change results. It does not block node [f].
 
 **Hito 3.96 is now ACCEPTED — the last accepted code hito.** Hito 3.95 remains accepted and frozen; ADR-016 is intact; OQ1 remains open. **OQ2 is now the next architectural bottleneck.** Next step: formally resolve ADR-015 OQ2 — PostgreSQL environment, driver, test/integration strategy, schema/migration ownership, local vs Railway, and the requirements for nodes [c] and [g]. The Writer/Reader/Lease are not implemented before that decision.
+
+## 30. PostgreSQL persistence environment (Hito 3.97 — ADR-017, DECIDED and published, not implemented)
+
+Resolves ADR-015 OQ2 (**RESOLVED**). Decision and design only: no dependency, SQL, Writer, Reader, Lease or test was added; Hito 3.96 remains the last accepted code hito and OQ1 remains open.
+
+**Facts.** CPython 3.14.6 locally; `pyproject.toml` has no `dependencies`; no SQL driver, ORM, migration tool, SQL code, CI, Docker, PostgreSQL or Homebrew exists.
+
+**Decisions.**
+- *Driver:* `psycopg` 3, synchronous API, `psycopg[binary]>=3.3,<3.4` (bundled libpq; wheels for CPython 3.10–3.14 on Linux and macOS). `asyncpg` is rejected because it would force an async boundary onto a synchronous Port, adapter and coordinator.
+- *No ORM, no pool in V1:* explicit parametrised SQL. Each account lease owns one dedicated connection, opened on acquire and closed on release, so a connection holding a session advisory lock can never be handed to another actor.
+- *Lock model:* the lease is `pg_advisory_lock(k)` (session-level) on that dedicated connection and lasts from the gate check to the result append. Every append also takes `pg_advisory_xact_lock(k)` with the same key inside its own transaction.
+  - While a lease exists, the Writer and Reader run on the lease's connection: re-entrancy only holds within one session. This is a contract requirement for [c].
+  - During the remote call the connection stays open but idle, never "idle in transaction".
+  - A lost connection releases the lock server-side and invalidates the handle; it is never silently reconnected.
+- *Lock key:* `int.from_bytes(sha256(b"phoenix:execution-account-lease:v1:" + account_id).digest()[:8], "big", signed=True)`. It is deterministic and versioned. An accidental collision (≈ n²/2⁶⁵) only causes spurious serialisation between two accounts: it never allows undue concurrency, never breaks exclusion and never mixes events or identities (sequence, uniqueness and reads stay keyed by the account id). It is an availability risk, not an integrity risk.
+- *Schema:* one table, `execution_ledger_events`.
+  - Columns: `event_id uuid` PK, account, `sequence bigint` with `UNIQUE (account, sequence)`, `occurred_at_ms`, `committed_at_ms` (PostgreSQL clock inside the append transaction), `event_type` checked against the accepted types, `schema_version`, denormalised `execution_order_id`, `payload jsonb`.
+  - Indexes: a partial unique index `(account, execution_order_id, event_type) WHERE event_type <> 'OrderObservedOpen'` and a lookup index `(account, execution_order_id, sequence)`.
+  - Immutability: the runtime role has only `SELECT, INSERT`, with `REVOKE UPDATE, DELETE, TRUNCATE`. Triggers that raise on update/delete/truncate add defence in depth for superuser credentials.
+- *Payload codec:* JSON object with exactly the dataclass fields.
+  - `Decimal` is stored as the string `str(d)` (exact, keeps the exponent). `float` is forbidden on encode and on decode.
+  - Decoding rebuilds the frozen dataclass, so corruption is detected on read. Stable-content comparison works on decoded objects, excluding `server_time_ms`.
+- *Migrations:* Phoenix's own versioned SQL files and a small forward-only runner.
+  - Each migration runs in its own transaction under an advisory lock and is recorded with a SHA-256 checksum, so edited history is detected.
+  - The exact expected schema version is verified at start-up (fail-closed).
+- *Tests:* the normative interface is `PHOENIX_TEST_DATABASE_URL`, pointing at a real, compatible PostgreSQL (≥ 16).
+  - Contracts, Writer, Reader, Lease, schema, migrations and production code depend on no server provider: not `pixeltable-pgserver`, Docker, Postgres.app or Railway.
+  - `pixeltable-pgserver` is only the preferred V1 local test-server candidate. It is adopted as a dev/test dependency only if Hito 4.00's acceptance gate passes on CPython 3.14 / macOS ARM64. The gate covers start/stop, psycopg connections, transactions, session and transaction advisory locks, two connections and two processes, restart, immediate stop with crash semantics, and WAL recovery.
+  - If the gate fails, only the local provider is replaced; nothing in [c] or [g] changes.
+  - Unit tests need no database. Each integration test gets a fresh database.
+  - With `PHOENIX_REQUIRE_POSTGRES=1`, which is mandatory for audits, a missing PostgreSQL is a failure, never a skip. Without the flag, integration tests may skip explicitly.
+  - Railway validation is separate and happens in [k].
+- *Durability evidence:* Phoenix V1 shows that PostgreSQL confirmed `COMMIT` under `synchronous_commit = on` and `fsync = on`, and that the data survive the process, connection and restart scenarios its integration tests can run. Those scenarios are client kill before and after commit, connection loss, and a crash-style restart of the local test server. Tolerance to hardware loss, volume corruption or provider-level disaster is not claimed: it is outside the client's control.
+- *Railway (design target):*
+  - A managed PostgreSQL service in EU West, reached through `PHOENIX_LEDGER_DATABASE_URL`, which is never logged, with `sslmode=require`.
+  - Migrations run before deploy with the owner credential.
+  - A start-up preflight checks the connection, the exact schema version and `fsync`.
+  - If the database is down, no orders are placed.
+
+**OQ1 does not block [c].** Storage primitives and neutral Reader queries are policy-free. "Resolving fact" is Gate policy ([h]), and OQ1 only adds a payload type, a forward migration and an entry in that policy.
+
+**DAG:**
+1. 3.98 [c1]: contracts (Writer/Reader/Lease Protocols with an account-session handle, `AppendReceipt`, errors, the pure lock-key function).
+2. 3.99 [c2]: the pure payload codec.
+3. 4.00 [g0]: the first dependency, the integration-test infrastructure (`PHOENIX_TEST_DATABASE_URL` plus REQUIRE mode), the local-provider acceptance gate, the migration runner, migration 0001 and the preflight.
+4. 4.01: the Writer.
+5. 4.02: the Reader.
+6. 4.03: the Lease.
+7. Then [h] → [i] ∥ [j] → OQ1 → [k].
