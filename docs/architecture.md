@@ -928,3 +928,25 @@ Resolves ADR-015 OQ2 (**RESOLVED**). Decision and design only: no dependency, SQ
 5. 4.02: the Reader.
 6. 4.03: the Lease.
 7. Then [h] → [i] ∥ [j] → OQ1 → [k].
+
+## 31. Pure persistence contracts (Hito 3.98 — node [c1], IMPLEMENTED, pending independent adversarial audit)
+
+Pure domain contracts for the Execution Ledger persistence boundary, derived from ADR-011 D2, ADR-015 D14/D16/D22 and ADR-017 D3/D5/D13/D14. No driver, SQL, migration, PostgreSQL, pool or concrete implementation exists; Hito 3.96 remains the last accepted code hito and OQ1 remains open.
+
+**Modules** (all domain-only, all in the purity policy; `__init__.py` +32/−0):
+- `execution_ledger_persistence_contracts.py`:
+  - `AppendReceipt(event_id, execution_account_id, sequence >= 1, committed_at_ms >= 0)` is a frozen value object. `sequence` is per-account commit order, assigned by the Writer, with no global continuity. `committed_at_ms` is storage time assigned by the Writer, distinct from the domain `occurred_at_ms`. The receipt carries no payload and no storage-specific id.
+  - `StoredExecutionLedgerEvent(event, sequence, committed_at_ms)` is the Reader's read value, since the envelope carries neither storage field.
+  - `ExecutionLedgerWriter.append(*, execution_account_id, occurred_at_ms, payload) -> AppendReceipt` is the literal ADR-011 D2 signature. The Writer generates `event_id`, `sequence` and `committed_at_ms`, and the receipt exists only after the durable commit. The surface is append-only: no update, delete, replace, upsert or batch.
+  - `ExecutionLedgerReader` is policy-neutral. It has four account-scoped reads, all ordered by `sequence`: `read_account_events`, `read_order_events`, `read_last_order_event`, `read_order_ids_with_event_type`. Event types are identified by payload class. No read defines "resolved", "terminal" or "blocked": that is Gate [h] policy, and OQ1 will only extend it.
+- `execution_account_lease_contracts.py`:
+  - `AccountLeaseHandle` exposes `execution_account_id`, `writer`, `reader` and `release()`. The Writer and Reader belong to the same lease, so they share one conceptual session. There is no silent reconnection; after a loss, operations raise `LeaseLostError`.
+  - `AccountExecutionLease.acquire(*, execution_account_id) -> AccountLeaseHandle` has no timeout parameter (OQ3 is left to the implementation).
+- `execution_ledger_persistence_errors.py`: base `ExecutionLedgerPersistenceError` plus sibling `LedgerAppendError`, `LedgerReadError`, `LedgerIntegrityError`, `LeaseNotAcquiredError` and `LeaseLostError`. None inherits from a driver error, and each takes a keyword-only non-blank `message`.
+- `execution_account_lock_key.py`: `account_lock_key(ExecutionAccountId) -> int` is the first 8 bytes of SHA-256(`phoenix:execution-account-lease:v1:` + the UTF-8 account value), read big-endian signed. It is deterministic across processes and never uses `hash()`.
+
+**Derivations to confirm in the audit** (not literal in the ADRs): the `StoredExecutionLedgerEvent` carrier; the exact names and partition of the four reads (ADR-017 D13 lists them conceptually); the five-error hierarchy under one base; and exposing `writer`/`reader` on the handle instead of a context manager or a validity flag.
+
+**Evidence.** 295 new tests (suite 7694 → 7989). Known lock-key vectors were computed independently with `hashlib` and `struct`. A cross-process probe ran 11,000 ids in 5 processes with different `PYTHONHASHSEED` values: all matched the independent reference and all 11,000 keys were distinct. The implementer's mutation battery has 68 mutants, all detected. The two mutants importing `psycopg` died by collection error because the driver is not installed, so they were redone with an importable module and now die by the import-set test. M13b is killed only by a source-inspection neutrality guard.
+
+**Not implemented (scope).** Concrete Writer, Reader or Lease, codec, schema, migrations, Gate, Coordinator, Recovery, composition root, OQ1. ADR-017 is untouched. Next: independent adversarial audit, then 3.99 [c2] (payload codec).
