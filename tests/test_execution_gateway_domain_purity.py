@@ -16,6 +16,10 @@ import execution_gateway.execution_infrastructure_error as execution_infrastruct
 import execution_gateway.execution_request_not_supported_error as execution_request_not_supported_error_module
 import execution_gateway.order_submission_outcome_contracts as order_submission_outcome_contracts_module
 import execution_gateway.order_submission_port as order_submission_port_module
+import execution_gateway.execution_account_lease_contracts as execution_account_lease_contracts_module
+import execution_gateway.execution_account_lock_key as execution_account_lock_key_module
+import execution_gateway.execution_ledger_persistence_contracts as execution_ledger_persistence_contracts_module
+import execution_gateway.execution_ledger_persistence_errors as execution_ledger_persistence_errors_module
 import execution_gateway.factory as factory_module
 import execution_gateway.gateway as gateway_module
 from execution_gateway.bybit_api_error import BybitApiError
@@ -40,6 +44,10 @@ _DOMAIN_ONLY_MODULES = (
     canonical_execution_decimal_module,
     order_submission_outcome_contracts_module,
     order_submission_port_module,
+    execution_account_lease_contracts_module,
+    execution_account_lock_key_module,
+    execution_ledger_persistence_contracts_module,
+    execution_ledger_persistence_errors_module,
 )
 
 _KNOWN_EXCHANGE_NAMES = ("Bybit", "Binance", "OKX", "Hyperliquid")
@@ -111,7 +119,8 @@ class TestOnlyTheAdapterKnowsBybitTypes:
         for module_name in (
             "gateway", "contracts", "dry_run_gateway", "fake_gateway", "factory",
             "canonical_execution_decimal", "order_submission_outcome_contracts",
-            "order_submission_port",
+            "order_submission_port", "execution_account_lease_contracts", "execution_account_lock_key",
+            "execution_ledger_persistence_contracts", "execution_ledger_persistence_errors",
         ):
             module = __import__(f"execution_gateway.{module_name}", fromlist=[module_name])
             src = inspect.getsource(module)

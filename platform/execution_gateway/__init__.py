@@ -284,6 +284,25 @@ from execution_gateway.bybit_order_submission_response_interpreter import (
     BybitOrderSubmissionResponseInterpreter,
 )
 from execution_gateway.bybit_order_submission_adapter import BybitOrderSubmissionAdapter
+from execution_gateway.execution_ledger_persistence_errors import (
+    ExecutionLedgerPersistenceError,
+    LedgerAppendError,
+    LedgerReadError,
+    LedgerIntegrityError,
+    LeaseNotAcquiredError,
+    LeaseLostError,
+)
+from execution_gateway.execution_ledger_persistence_contracts import (
+    AppendReceipt,
+    StoredExecutionLedgerEvent,
+    ExecutionLedgerWriter,
+    ExecutionLedgerReader,
+)
+from execution_gateway.execution_account_lease_contracts import (
+    AccountLeaseHandle,
+    AccountExecutionLease,
+)
+from execution_gateway.execution_account_lock_key import account_lock_key
 
 __all__ = [
     "__version__",
@@ -491,4 +510,17 @@ __all__ = [
     "OrderSubmissionPort",
     "BybitOrderSubmissionResponseInterpreter",
     "BybitOrderSubmissionAdapter",
+    "ExecutionLedgerPersistenceError",
+    "LedgerAppendError",
+    "LedgerReadError",
+    "LedgerIntegrityError",
+    "LeaseNotAcquiredError",
+    "LeaseLostError",
+    "AppendReceipt",
+    "StoredExecutionLedgerEvent",
+    "ExecutionLedgerWriter",
+    "ExecutionLedgerReader",
+    "AccountLeaseHandle",
+    "AccountExecutionLease",
+    "account_lock_key",
 ]
