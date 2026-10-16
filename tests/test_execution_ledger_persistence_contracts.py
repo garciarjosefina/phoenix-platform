@@ -163,8 +163,19 @@ class TestStoredExecutionLedgerEvent:
         with pytest.raises(dataclasses.FrozenInstanceError):
             _stored().sequence = 9
 
-    @pytest.mark.parametrize("bad", [None, "event", 1, _receipt(), OrderObservedOpen, _Obj()])
-    def test_event_must_be_an_execution_ledger_event(self, bad):
+    # Las instancias se construyen DENTRO del test (factories perezosas): si
+    # `AppendReceipt` se rompiera, falla este test -- no la colección de todo
+    # el archivo, que enmascararía el resto (lección de 3.95/3.94).
+    @pytest.mark.parametrize("make_bad", [
+        lambda: None,
+        lambda: "event",
+        lambda: 1,
+        lambda: _receipt(),
+        lambda: OrderObservedOpen,
+        lambda: _Obj(),
+    ], ids=["none", "str", "int", "receipt", "payload-class", "obj"])
+    def test_event_must_be_an_execution_ledger_event(self, make_bad):
+        bad = make_bad()
         with pytest.raises(TypeError):
             _stored(event=bad)
 
