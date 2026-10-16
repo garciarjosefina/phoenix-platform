@@ -929,9 +929,9 @@ Resolves ADR-015 OQ2 (**RESOLVED**). Decision and design only: no dependency, SQ
 6. 4.03: the Lease.
 7. Then [h] → [i] ∥ [j] → OQ1 → [k].
 
-## 31. Pure persistence contracts (Hito 3.98 — node [c1], IMPLEMENTED, pending independent adversarial audit)
+## 31. Pure persistence contracts (Hito 3.98 — node [c1], ACCEPTED)
 
-Pure domain contracts for the Execution Ledger persistence boundary, derived from ADR-011 D2, ADR-015 D14/D16/D22 and ADR-017 D3/D5/D13/D14. No driver, SQL, migration, PostgreSQL, pool or concrete implementation exists; Hito 3.96 remains the last accepted code hito and OQ1 remains open.
+Pure domain contracts for the Execution Ledger persistence boundary, derived from ADR-011 D2, ADR-015 D14/D16/D22 and ADR-017 D3/D5/D13/D14. No driver, SQL, migration, PostgreSQL, pool or concrete implementation exists. At the time of writing Hito 3.96 was the last accepted code hito; 3.98 has since been ACCEPTED (see «Acceptance» below). OQ1 remains open.
 
 **Modules** (all domain-only, all in the purity policy; `__init__.py` +32/−0):
 - `execution_ledger_persistence_contracts.py`:
@@ -950,3 +950,13 @@ Pure domain contracts for the Execution Ledger persistence boundary, derived fro
 **Evidence.** 295 new tests (suite 7694 → 7989). Known lock-key vectors were computed independently with `hashlib` and `struct`. A cross-process probe ran 11,000 ids in 5 processes with different `PYTHONHASHSEED` values: all matched the independent reference and all 11,000 keys were distinct. The implementer's mutation battery has 68 mutants, all detected. The two mutants importing `psycopg` died by collection error because the driver is not installed, so they were redone with an importable module and now die by the import-set test. M13b is killed only by a source-inspection neutrality guard.
 
 **Not implemented (scope).** Concrete Writer, Reader or Lease, codec, schema, migrations, Gate, Coordinator, Recovery, composition root, OQ1. ADR-017 is untouched. Next: independent adversarial audit, then 3.99 [c2] (payload codec).
+
+**Acceptance (independent adversarial audit: `ACEPTAR HITO 3.98` — 0 blocking, 0 important, 4 minor, all addressed; custody `1e3e6ef → 8056601 → e5c52a8`, no amend).** The audit verified the lock key with a non-Python SHA-256 (`openssl`) on five vectors including Unicode, the purity of all four modules by AST, and a 64-mutant independent battery: 62 causal kills, one collection break fixed below, and one equivalent (the error base inheriting from `RuntimeError`). It also built an independent in-memory, multi-threaded model of the four Protocols to prove implementability: the full Coordinator flow, idempotency, integrity errors, exclusion, lease loss without reconnection, and per-account `sequence` 1..200 without gaps under 8 threads. No signature or ownership contradiction was found. The four non-literal derivations were all classified ACCEPTABLE: the stored-event carrier, the four Reader reads, the five-error hierarchy, and the handle exposing `writer`/`reader`/`release()`.
+
+**Contract precisions recorded by the audit** (documentation only; the production modules are byte-identical, so their docstrings were not changed — [g1]–[g3] and the Gate must implement and test them):
+- **Foreign account (MINOR-1).** A Writer or Reader bound to a lease rejects any operation addressed to a different `ExecutionAccountId`. Violating this precondition is a programming error (`ValueError`), neither an economic divergence nor a persistence failure; none of the five port errors is used.
+- **Id uniqueness (MINOR-2).** `read_order_ids_with_event_type` returns each `ExecutionOrderId` once, ordered by the first occurrence of the requested type by `sequence`. This includes repeated `OrderObservedOpen` events.
+- **Lease loss (MINOR-3).** `LeaseLostError` means the session or exclusion can no longer be trusted. An operation in flight may have an uncertain outcome. It must never be inferred that the append did not happen, that the remote operation did not happen, that retrying is safe, or that the handle can keep being used. Recovery and verification against the Ledger are required before any continuation.
+- **Test construction (MINOR-4).** The `AppendReceipt` instance built at import inside `pytest.mark.parametrize` became lazy factories (commit `57e95d2`, test-only). Mutation A01 (dropping a receipt field) now dies with 15 causal failures instead of a collection error. The suite stays at 7989.
+
+**Hito 3.98 is now ACCEPTED — the last accepted code hito.** Hito 3.96 remains accepted and frozen; ADR-017 is intact; OQ1 remains open and OQ2 remains resolved. **Next: Hito 3.99 [c2] — the Execution Ledger event codec** (typed envelope + JSONB payload, `Decimal` as an exact string, `float` forbidden, corruption detection), with no PostgreSQL, `psycopg`, SQL or migrations.
