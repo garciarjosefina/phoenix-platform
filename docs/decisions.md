@@ -1934,3 +1934,18 @@ Ningún receipt sin `COMMIT` con `synchronous_commit = on`; ningún módulo de `
 Nada: ni dependencias, ni SQL, ni Writer/Reader/Lease, ni migraciones, ni tests. `platform/`, `tests/`, `pyproject.toml` y `railway.toml` byte-idénticos. **Suite:** 7694 passing, sin cambio. OQ1 sigue abierta.
 
 **OQ2 RESUELTA.** Próximo hito: **3.98 — contratos [c1]** (Protocols Writer/Reader/Lease, `AppendReceipt`, errores, clave de lock pura).
+
+
+---
+
+## ERRATA de ADR-017 — son SIETE los tipos de payload del Execution Ledger, no ocho
+
+**Fecha:** 2026-10-29
+**Contexto:** Hito 3.99 [c2] (codec del Ledger). Append-only: ADR-017 NO se reescribe; esta errata lo corrige por referencia.
+
+**Hecho verificado mecánicamente** (enumeración de las dataclasses que heredan de `ExecutionLedgerEventPayload` en `execution_ledger_event_contracts.py`): existen exactamente **siete** tipos concretos de payload — `OrderSubmissionAttempted`, `OrderSubmissionOutcomeUnknown`, `OrderAcceptedByExchange`, `OrderRejectedByExchange`, `OrderIdentityReportedDuplicateByExchange`, `OrderObservedOpen` y `OrderObservedClosed`. No existe ni se introduce un octavo tipo.
+
+**Qué corrige:** ADR-017 D6 (esquema ilustrativo) escribe `CHECK (event_type IN (<los 8 tipos aceptados>))` y, en su lista de viñetas, «`execution_order_id` desnormalizado (los 8 tipos actuales lo portan …)»; ambas referencias deben leerse **«los 7 tipos»**. El docstring de `OrderObservedClosed` (Hito 3.94) que lo llama «octavo tipo» procede del mismo conteo erróneo; ese código aceptado y congelado no se modifica y el error queda registrado aquí.
+
+**Consecuencia para la migración 0001 (nodo [g0]):** el `CHECK` de `event_type` debe listar exactamente estos siete nombres. La fuente única de verdad del conjunto es el registro explícito del codec (`execution_ledger_event_codec`, 3.99): un test lo compara con la enumeración mecánica de las dataclasses, y ampliarlo (p. ej. con el evento de OQ1) exige una migración hacia adelante que amplíe el `CHECK`. Los siete tipos portan `execution_order_id` (NOT NULL en la práctica); la nulabilidad de la columna sigue reservada a futuros eventos no order-scoped.
+

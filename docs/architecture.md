@@ -960,3 +960,35 @@ Pure domain contracts for the Execution Ledger persistence boundary, derived fro
 - **Test construction (MINOR-4).** The `AppendReceipt` instance built at import inside `pytest.mark.parametrize` became lazy factories (commit `57e95d2`, test-only). Mutation A01 (dropping a receipt field) now dies with 15 causal failures instead of a collection error. The suite stays at 7989.
 
 **Hito 3.98 is now ACCEPTED — the last accepted code hito.** Hito 3.96 remains accepted and frozen; ADR-017 is intact; OQ1 remains open and OQ2 remains resolved. **Next: Hito 3.99 [c2] — the Execution Ledger event codec** (typed envelope + JSONB payload, `Decimal` as an exact string, `float` forbidden, corruption detection), with no PostgreSQL, `psycopg`, SQL or migrations.
+
+## 32. Execution Ledger event codec (Hito 3.99 — node [c2], IMPLEMENTED, pending independent adversarial audit)
+
+A pure, deterministic and reversible codec between the Ledger payload dataclasses and the persisted representation of ADR-017 D6/D7. Hito 3.98 is the last accepted code hito; OQ1 is open and OQ2 is resolved. No PostgreSQL, `psycopg`, SQL or migration exists.
+
+**Seven payload types, not eight.** The registry is an explicit table of the seven concrete dataclasses (`OrderSubmissionAttempted`, `OrderSubmissionOutcomeUnknown`, `OrderAcceptedByExchange`, `OrderRejectedByExchange`, `OrderIdentityReportedDuplicateByExchange`, `OrderObservedOpen`, `OrderObservedClosed`). It resolves classes by exact type, never dynamically. A test compares the registry with the mechanical enumeration of the ledger module. The "8" in ADR-017 D6 is corrected by an append-only erratum in `decisions.md`; ADR-017 itself is untouched.
+
+**What belongs where.**
+- *Typed columns (Writer/Reader, [g]):* `event_id`, `execution_account_id`, `sequence`, `occurred_at_ms`, `committed_at_ms`, `event_type`, `schema_version`, `execution_order_id`.
+- *Codec:* `payload ⇄ (event_type, schema_version, document)`. The document holds exactly the dataclass fields, with no envelope fields and no discriminator inside it. `execution_order_id` is the one deliberate duplicate: the column is a derived index, checked against the document at construction and again on decode (`envelope_mismatch`).
+- *Public API:* `encode_payload`, `decode_payload`, `decode_stored_event`, `canonical_json`, `parse_document_strict`, `EncodedLedgerPayload`, `LedgerDecodeError`, `LedgerEncodeError`. `schema_version` is 1 for all seven types.
+
+**Exactness.**
+- `Decimal` is a string `str(d)`, exact, with sign, digits and exponent preserved: `0.10` and `0.1` stay distinct, and `1E+2` and `0E-8` round-trip. Decoding accepts only the canonical form (`str(Decimal(s)) == s`), so `1e-7`, `+1`, `1_000`, non-ASCII digits, padding, `1.`, `NaN` and `Infinity` are rejected. No `float`, `normalize`, `quantize` or rounding is used, and precision above the default context survives.
+- Optionals are explicit `null`, never omitted. Extra or missing fields, wrong JSON types (including bool-as-int and float-as-int), unknown versions or event types, invalid identities and dataclass-invariant violations are all corruption.
+- Valid Unicode is preserved literally, with no normalization. U+0000 and lone surrogates cannot be stored by PostgreSQL `jsonb`/UTF-8 and fail closed on encode, with no invented escape.
+- Round-trip: `decode(encode(p)) == p`, with exact class and identical `Decimal.as_tuple()`. The canonical text is idempotent. No promise is made about `jsonb` bytes, only about object equality.
+
+**Errors.** `LedgerDecodeError(LedgerIntegrityError)` has a closed reason set: `unknown_schema_version`, `unknown_event_type`, `unexpected_field`, `missing_field`, `invalid_field_type`, `invalid_decimal`, `invalid_identity`, `envelope_mismatch`, `invariant_violation`, `malformed_document`. It names the field, never its value, and chains the original validation error. `LedgerEncodeError(LedgerAppendError)` has the reasons `nul_character` and `invalid_unicode`. Corruption is never a `LedgerReadError`. Programming errors (an unregistered or subclassed payload, a tampered field type, an unexpected exception from a constructor) propagate unwrapped.
+
+**Not a policy.** The codec decides nothing about resolution, blocking, retry, idempotency or stable content. `server_time_ms` is an ordinary integer field with no hash or digest. The Writer will compare stable content on decoded objects, as in ADR-015 D16.
+
+**Evidence.**
+- 780 new codec tests (suite 7989 → 8771; two full green runs, with logs, PID and exit code kept outside the repo).
+- The implementer's 84-mutant campaign ran on persistent isolated copies with per-batch checkpoints: 73 causal kills, 6 structural-only (imports, exports, public surface), 5 equivalents, 0 collection errors. The campaign exposed five real test weaknesses, now fixed and re-verified:
+  - name-based class recognition accepted an impostor;
+  - there was no padded-text sample;
+  - envelope errors did not assert the offending field (sequence 0 and bool);
+  - the broad `except` was protected only structurally.
+- The five equivalents are three redundant column checks that yield the same reason and field downstream, one unreachable wrap branch, and `allow_nan` (floats are rejected earlier).
+
+**Next.** Independent adversarial audit of 3.99, then 4.00 [g0] (first dependency, integration-test infrastructure, migration runner, migration 0001 whose `CHECK` lists exactly these seven names).
