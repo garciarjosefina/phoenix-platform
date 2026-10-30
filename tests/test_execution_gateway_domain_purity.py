@@ -20,6 +20,7 @@ import execution_gateway.execution_account_lease_contracts as execution_account_
 import execution_gateway.execution_account_lock_key as execution_account_lock_key_module
 import execution_gateway.execution_ledger_persistence_contracts as execution_ledger_persistence_contracts_module
 import execution_gateway.execution_ledger_persistence_errors as execution_ledger_persistence_errors_module
+import execution_gateway.execution_ledger_event_codec as execution_ledger_event_codec_module
 import execution_gateway.factory as factory_module
 import execution_gateway.gateway as gateway_module
 from execution_gateway.bybit_api_error import BybitApiError
@@ -48,6 +49,7 @@ _DOMAIN_ONLY_MODULES = (
     execution_account_lock_key_module,
     execution_ledger_persistence_contracts_module,
     execution_ledger_persistence_errors_module,
+    execution_ledger_event_codec_module,
 )
 
 _KNOWN_EXCHANGE_NAMES = ("Bybit", "Binance", "OKX", "Hyperliquid")
@@ -121,6 +123,7 @@ class TestOnlyTheAdapterKnowsBybitTypes:
             "canonical_execution_decimal", "order_submission_outcome_contracts",
             "order_submission_port", "execution_account_lease_contracts", "execution_account_lock_key",
             "execution_ledger_persistence_contracts", "execution_ledger_persistence_errors",
+            "execution_ledger_event_codec",
         ):
             module = __import__(f"execution_gateway.{module_name}", fromlist=[module_name])
             src = inspect.getsource(module)

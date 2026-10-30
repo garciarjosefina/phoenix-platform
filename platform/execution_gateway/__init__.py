@@ -303,6 +303,16 @@ from execution_gateway.execution_account_lease_contracts import (
     AccountExecutionLease,
 )
 from execution_gateway.execution_account_lock_key import account_lock_key
+from execution_gateway.execution_ledger_event_codec import (
+    EncodedLedgerPayload,
+    LedgerDecodeError,
+    LedgerEncodeError,
+    canonical_json,
+    decode_payload,
+    decode_stored_event,
+    encode_payload,
+    parse_document_strict,
+)
 
 __all__ = [
     "__version__",
@@ -523,4 +533,12 @@ __all__ = [
     "AccountLeaseHandle",
     "AccountExecutionLease",
     "account_lock_key",
+    "EncodedLedgerPayload",
+    "LedgerDecodeError",
+    "LedgerEncodeError",
+    "canonical_json",
+    "decode_payload",
+    "decode_stored_event",
+    "encode_payload",
+    "parse_document_strict",
 ]
