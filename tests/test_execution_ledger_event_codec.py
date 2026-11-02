@@ -929,6 +929,12 @@ class TestCanonicalJson:
     def test_booleans_are_not_confused_with_integers(self):
         assert canonical_json({"a": True, "b": 1, "c": False, "d": 0}) == '{"a":true,"b":1,"c":false,"d":0}'
 
+    def test_tuples_and_nested_frozen_mappings_serialize_as_arrays_and_objects(self):
+        # El carrier congela listas como tuplas: el texto canónico debe seguir siendo el mismo.
+        frozen = MappingProxyType({"b": (1, MappingProxyType({"d": 2, "c": None})), "a": True})
+        assert canonical_json(frozen) == '{"a":true,"b":[1,{"c":null,"d":2}]}'
+        assert canonical_json({"x": [1, 2]}) == canonical_json({"x": (1, 2)})
+
     def test_accepts_a_frozen_mapping_proxy(self):
         enc = encode_payload(_SAMPLES["accepted"]())
         assert canonical_json(enc.document) == canonical_json(dict(enc.document))
@@ -974,7 +980,7 @@ class TestErrors:
         error = LedgerDecodeError(reason=reason, field="f")
         assert error.reason == reason and error.field == "f" and reason in str(error)
 
-    @pytest.mark.parametrize("reason", ["nul_character", "invalid_unicode"])
+    @pytest.mark.parametrize("reason", ["nul_character", "invalid_unicode", "integer_not_serializable"])
     def test_every_encode_reason_is_constructible(self, reason):
         assert LedgerEncodeError(reason=reason).reason == reason
 
@@ -990,7 +996,7 @@ class TestErrors:
 
     def test_the_closed_sets_are_exactly_the_documented_ones(self):
         assert _codec._DECODE_REASONS == frozenset(_DECODE_REASONS)
-        assert _codec._ENCODE_REASONS == frozenset({"nul_character", "invalid_unicode"})
+        assert _codec._ENCODE_REASONS == frozenset({"nul_character", "invalid_unicode", "integer_not_serializable"})
 
     def test_field_must_be_text_or_none(self):
         with pytest.raises(TypeError):
@@ -1132,7 +1138,7 @@ class TestPurityAndStructure:
         assert sorted(ast.unparse(h.type) for h in handlers) == sorted([
             "(TypeError, ValueError)", "(TypeError, ValueError)", "(TypeError, ValueError)", "(TypeError, ValueError)",
             "(TypeError, ValueError)", "(ValueError, RecursionError)", "InvalidOperation", "UnicodeEncodeError",
-            "UnicodeEncodeError",
+            "UnicodeEncodeError", "ValueError",
         ])
 
     def test_no_resolution_policy_idempotency_or_stable_content_logic(self):
@@ -1142,8 +1148,8 @@ class TestPurityAndStructure:
 
     def test_public_surface_is_exactly_the_documented_api(self):
         assert sorted(_codec.__all__) == sorted([
-            "EncodedLedgerPayload", "LedgerDecodeError", "LedgerEncodeError", "canonical_json", "decode_payload",
-            "decode_stored_event", "encode_payload", "parse_document_strict",
+            "EncodedLedgerPayload", "LEDGER_EVENT_TYPES", "LedgerDecodeError", "LedgerEncodeError", "canonical_json",
+            "decode_payload", "decode_stored_event", "encode_payload", "event_type_for", "parse_document_strict",
         ])
 
     def test_functions_are_keyword_only_where_specified(self):
@@ -1157,8 +1163,316 @@ class TestPurityAndStructure:
 
     @pytest.mark.parametrize("name", [
         "EncodedLedgerPayload", "LedgerDecodeError", "LedgerEncodeError", "canonical_json", "decode_payload",
-        "decode_stored_event", "encode_payload", "parse_document_strict",
+        "decode_stored_event", "encode_payload", "parse_document_strict", "LEDGER_EVENT_TYPES", "event_type_for",
     ])
     def test_exported_from_package(self, name):
         assert getattr(execution_gateway, name) is getattr(_codec, name)
         assert name in execution_gateway.__all__
+
+
+# ---------------------------------------------------------------------------
+# IMPORTANTE-1: API pública del registro (auditoría 3.99)
+# ---------------------------------------------------------------------------
+
+class TestPublicRegistryApi:
+    def test_event_types_tuple_is_exactly_the_seven_names_in_registry_order(self):
+        assert isinstance(_codec.LEDGER_EVENT_TYPES, tuple)
+        assert _codec.LEDGER_EVENT_TYPES == _EXPECTED_TYPES
+        assert _codec.LEDGER_EVENT_TYPES == tuple(_codec._REGISTRY)
+        assert len(set(_codec.LEDGER_EVENT_TYPES)) == 7
+
+    def test_event_types_tuple_is_immutable(self):
+        with pytest.raises(TypeError):
+            _codec.LEDGER_EVENT_TYPES[0] = "x"
+
+    @pytest.mark.parametrize("name", _EXPECTED_TYPES)
+    def test_each_registered_class_maps_to_its_own_name(self, name):
+        assert _codec.event_type_for(getattr(_ledger, name)) == name
+
+    def test_mapping_is_exhaustive_over_the_mechanical_enumeration_of_payload_classes(self):
+        classes = [
+            o for o in vars(_ledger).values()
+            if isinstance(o, type) and dataclasses.is_dataclass(o) and issubclass(o, ExecutionLedgerEventPayload)
+        ]
+        assert len(classes) == 7
+        assert {_codec.event_type_for(c) for c in classes} == set(_codec.LEDGER_EVENT_TYPES)
+
+    @pytest.mark.parametrize("sample", _SAMPLE_IDS)
+    def test_it_agrees_with_what_encode_payload_writes(self, sample):
+        payload = _SAMPLES[sample]()
+        assert encode_payload(payload).event_type == _codec.event_type_for(type(payload))
+
+    def test_function_and_tuple_come_from_the_same_registry(self):
+        assert {_codec.event_type_for(cls) for cls, _ in _codec._REGISTRY.values()} == set(_codec.LEDGER_EVENT_TYPES)
+        assert set(_codec._NAME_BY_CLASS.values()) == set(_codec.LEDGER_EVENT_TYPES)
+
+    @pytest.mark.parametrize("make", [
+        lambda: LocalFact, lambda: RemoteFact, lambda: ObservedFact, lambda: ExecutionLedgerEventPayload,
+    ], ids=["local", "remote", "observed", "base"])
+    def test_markers_are_rejected(self, make):
+        with pytest.raises(TypeError):
+            _codec.event_type_for(make())
+
+    def test_a_subclass_of_a_registered_class_is_rejected(self):
+        class Sub(OrderAcceptedByExchange):
+            pass
+
+        with pytest.raises(TypeError):
+            _codec.event_type_for(Sub)
+
+    def test_an_impostor_with_a_registered_name_is_rejected(self):
+        @dataclasses.dataclass(frozen=True)
+        class OrderAcceptedByExchange:  # mismo nombre, otra clase: el nombre no autoriza
+            execution_order_id: ExecutionOrderId
+
+        assert OrderAcceptedByExchange.__name__ in _codec.LEDGER_EVENT_TYPES
+        with pytest.raises(TypeError):
+            _codec.event_type_for(OrderAcceptedByExchange)
+
+    @pytest.mark.parametrize("make", [
+        lambda: None, lambda: "OrderAcceptedByExchange", lambda: 5, lambda: True, lambda: [OrderAcceptedByExchange],
+        lambda: {"a": 1}, lambda: object(), lambda: _SAMPLES["accepted"](), lambda: _oid(), lambda: Decimal,
+        lambda: ExecutionOrderId, lambda: int, lambda: type, lambda: type(None), lambda: _Obj,
+    ], ids=["none", "str", "int", "bool", "list", "dict", "object", "instance", "identity", "Decimal", "ExecutionOrderId",
+            "int-class", "type", "NoneType", "other-class"])
+    def test_non_registered_inputs_raise_type_error(self, make):
+        with pytest.raises(TypeError):
+            _codec.event_type_for(make())
+
+    def test_an_instance_of_a_registered_class_is_not_a_class(self):
+        with pytest.raises(TypeError):
+            _codec.event_type_for(_SAMPLES["accepted"]())
+
+    def test_the_name_is_never_used_as_the_authorization_mechanism(self):
+        tree = ast.parse(inspect.getsource(_codec.event_type_for))
+        attrs = {n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute)}
+        # `__name__` sólo aparece para formatear el mensaje de error, nunca en una condición.
+        conditions = [n.test for n in ast.walk(tree) if isinstance(n, ast.If)]
+        conditions += [n for n in ast.walk(tree) if isinstance(n, ast.Compare)]
+        assert conditions
+        for cond in conditions:
+            assert "__name__" not in ast.unparse(cond), ast.unparse(cond)
+        assert "__name__" in attrs
+
+    def test_the_registry_is_not_duplicated_inside_the_function(self):
+        src = inspect.getsource(_codec.event_type_for)
+        for name in _EXPECTED_TYPES:
+            assert name not in src
+
+
+# ---------------------------------------------------------------------------
+# IMPORTANTE-2: preservación literal de identidades y texto (auditoría 3.99)
+# ---------------------------------------------------------------------------
+
+_LITERALS = [
+    "  acct-1", "acct-1  ", " Acct-1 ", "ACCT-1", "acct-1", "ÑANDÚ", "ñandú", "Ä", "ä", "Σ", "σ", "ς", "ß", "İ",
+    "ǅ", "ﬁ", "\u00e9", "e\u0301", "ΑΣ", "ÑANDÚ-NFD".replace("Ñ", "N\u0303"), "MiXeD-ñ-Ç", "\t tab \t",
+]
+
+
+class TestLiteralPreservation:
+    @pytest.mark.parametrize("literal", _LITERALS)
+    def test_account_id_is_preserved_exactly(self, literal):
+        stored = decode_stored_event(**_stored_kwargs("accepted", execution_account_id=literal))
+        assert stored.event.execution_account_id.value == literal
+
+    @pytest.mark.parametrize("literal", _LITERALS)
+    def test_event_id_is_preserved_exactly(self, literal):
+        stored = decode_stored_event(**_stored_kwargs("accepted", event_id=literal))
+        assert stored.event.event_id.value == literal
+
+    @pytest.mark.parametrize("literal", _LITERALS)
+    def test_text_fields_are_preserved_exactly_through_the_whole_pipeline(self, literal):
+        payload = OrderRejectedByExchange(execution_order_id=_oid(), ret_code=1, ret_msg=literal, server_time_ms=1)
+        enc = encode_payload(payload)
+        assert enc.document["ret_msg"] == literal
+        back = decode_payload(
+            event_type=enc.event_type, schema_version=1, document=parse_document_strict(canonical_json(enc.document))
+        )
+        assert back.ret_msg == literal and back == payload
+
+    @pytest.mark.parametrize("literal", _LITERALS)
+    def test_exchange_id_and_symbol_are_preserved_exactly(self, literal):
+        accepted = OrderAcceptedByExchange(execution_order_id=_oid(), exchange_order_id=literal, server_time_ms=1)
+        attempted = OrderSubmissionAttempted(
+            execution_order_id=_oid(), symbol=literal, side="buy", order_type="market", quantity=Decimal("1"))
+        for payload in (accepted, attempted):
+            enc = encode_payload(payload)
+            assert decode_payload(event_type=enc.event_type, schema_version=1, document=enc.document) == payload
+
+    def test_nfc_and_nfd_identities_remain_distinct(self):
+        nfc, nfd = "\u00e9-acct", "e\u0301-acct"
+        a = decode_stored_event(**_stored_kwargs("accepted", execution_account_id=nfc)).event.execution_account_id
+        b = decode_stored_event(**_stored_kwargs("accepted", execution_account_id=nfd)).event.execution_account_id
+        assert a.value == nfc and b.value == nfd and a != b
+
+    def test_case_variants_of_the_same_identity_remain_distinct(self):
+        values = ["ÑANDÚ", "ñandú", "Ñandú"]
+        got = {decode_stored_event(**_stored_kwargs("accepted", event_id=v)).event.event_id.value for v in values}
+        assert got == set(values)
+
+    def test_the_decoder_does_not_normalize_identities_in_any_way(self):
+        tree = ast.parse(inspect.getsource(_codec))
+        attrs = {n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute)}
+        for forbidden in ("strip", "lstrip", "rstrip", "lower", "upper", "casefold", "title", "normalize",
+                          "capitalize", "swapcase"):
+            assert forbidden not in attrs, forbidden
+
+
+# ---------------------------------------------------------------------------
+# M1: el campo ofensor se nombra y se fija (auditoría 3.99)
+# ---------------------------------------------------------------------------
+
+_DECIMAL_FIELDS = [
+    ("OrderSubmissionAttempted", "quantity"), ("OrderSubmissionAttempted", "price"),
+    ("OrderObservedOpen", "quantity"), ("OrderObservedOpen", "filled_quantity"), ("OrderObservedOpen", "price"),
+    ("OrderObservedClosed", "quantity"), ("OrderObservedClosed", "filled_quantity"),
+    ("OrderObservedClosed", "filled_value"), ("OrderObservedClosed", "price"), ("OrderObservedClosed", "average_price"),
+]
+
+
+def _decode_error(name, doc):
+    with pytest.raises(LedgerDecodeError) as caught:
+        decode_payload(event_type=name, schema_version=1, document=doc)
+    return caught.value
+
+
+class TestOffendingFieldIsNamed:
+    @pytest.mark.parametrize("type_name,field", _TYPE_FIELD_PAIRS, ids=_PAIR_IDS)
+    def test_missing_field_names_the_missing_field(self, type_name, field):
+        doc = _doc(_SAMPLE_FOR_TYPE[type_name])
+        del doc[field]
+        error = _decode_error(type_name, doc)
+        assert (error.reason, error.field) == ("missing_field", field)
+
+    @pytest.mark.parametrize("extra", ["bogus", "should_retry", "server_time", "EXECUTION_ORDER_ID", "x"])
+    def test_unexpected_field_names_the_extra_field(self, extra):
+        doc = _doc("accepted")
+        doc[extra] = 1
+        error = _decode_error("OrderAcceptedByExchange", doc)
+        assert (error.reason, error.field) == ("unexpected_field", extra)
+
+    def test_with_several_extra_fields_the_first_in_sorted_order_is_named(self):
+        doc = _doc("accepted")
+        doc.update({"zeta": 1, "alpha": 2, "mid": 3})
+        assert _decode_error("OrderAcceptedByExchange", doc).field == "alpha"
+
+    @pytest.mark.parametrize("type_name,field", _DECIMAL_FIELDS)
+    @pytest.mark.parametrize("bad", ["1e-7", "NaN", "abc", 5, 1.5])
+    def test_invalid_decimal_names_the_decimal_field(self, type_name, field, bad):
+        doc = _doc(_SAMPLE_FOR_TYPE[type_name])
+        doc[field] = bad
+        error = _decode_error(type_name, doc)
+        assert (error.reason, error.field) == ("invalid_decimal", field)
+
+    @pytest.mark.parametrize("type_name,field", [
+        ("OrderAcceptedByExchange", "exchange_order_id"), ("OrderRejectedByExchange", "ret_msg"),
+        ("OrderObservedOpen", "reduce_only"), ("OrderObservedClosed", "remote_created_time_ms"),
+    ])
+    def test_invalid_field_type_names_the_field(self, type_name, field):
+        doc = _doc(_SAMPLE_FOR_TYPE[type_name])
+        doc[field] = [1]
+        error = _decode_error(type_name, doc)
+        assert (error.reason, error.field) == ("invalid_field_type", field)
+
+    def test_invalid_identity_names_the_field(self):
+        doc = _doc("attempted-limit-bot")
+        doc["execution_bot_id"] = ""
+        assert (_decode_error("OrderSubmissionAttempted", doc).reason,
+                _decode_error("OrderSubmissionAttempted", doc).field) == ("invalid_identity", "execution_bot_id")
+        doc = _doc("accepted")
+        doc["execution_order_id"] = "nope"
+        assert _decode_error("OrderAcceptedByExchange", doc).field == "execution_order_id"
+
+
+# ---------------------------------------------------------------------------
+# M2: enteros extremos (auditoría 3.99). El límite es el del propio intérprete.
+# ---------------------------------------------------------------------------
+
+_INT_LIMIT = sys.get_int_max_str_digits()
+_needs_limit = pytest.mark.skipif(_INT_LIMIT == 0, reason="el intérprete no limita la conversión de enteros")
+
+
+@_needs_limit
+class TestExtremeIntegers:
+    def _accepted(self, value):
+        return OrderAcceptedByExchange(execution_order_id=_oid(), exchange_order_id="E", server_time_ms=value)
+
+    def test_a_value_at_the_limit_round_trips_exactly_through_every_layer(self):
+        value = 10 ** (_INT_LIMIT - 1)  # exactamente _INT_LIMIT dígitos
+        payload = self._accepted(value)
+        enc = encode_payload(payload)
+        text = canonical_json(enc.document)
+        back = decode_payload(event_type=enc.event_type, schema_version=1, document=parse_document_strict(text))
+        assert back == payload and back.server_time_ms == value
+
+    def test_a_value_beyond_the_limit_is_rejected_on_encode_with_a_typed_error(self):
+        payload = self._accepted(10 ** _INT_LIMIT)  # _INT_LIMIT + 1 dígitos
+        with pytest.raises(LedgerEncodeError) as caught:
+            encode_payload(payload)
+        assert (caught.value.reason, caught.value.field) == ("integer_not_serializable", "server_time_ms")
+        assert isinstance(caught.value, LedgerAppendError)
+
+    @pytest.mark.parametrize("field", ["ret_code", "server_time_ms"])
+    def test_negative_and_positive_values_beyond_the_limit_are_rejected(self, field):
+        values = dict(ret_code=-(10 ** _INT_LIMIT), server_time_ms=10 ** _INT_LIMIT)
+        payload = OrderRejectedByExchange(
+            execution_order_id=_oid(), ret_code=10001, ret_msg="m", server_time_ms=1)
+        object.__setattr__(payload, field, values[field])  # el contrato de dominio no acota el entero
+        with pytest.raises(LedgerEncodeError) as caught:
+            encode_payload(payload)
+        assert caught.value.field == field
+
+    def test_every_integer_field_of_the_widest_payload_is_covered(self):
+        for field in ("server_time_ms", "remote_created_time_ms", "remote_updated_time_ms"):
+            payload = _closed()
+            object.__setattr__(payload, field, 10 ** _INT_LIMIT)
+            with pytest.raises(LedgerEncodeError) as caught:
+                encode_payload(payload)
+            assert caught.value.field == field
+
+    def test_canonical_json_rejects_an_unserializable_integer_with_the_typed_error(self):
+        with pytest.raises(LedgerEncodeError) as caught:
+            canonical_json({"a": 10 ** _INT_LIMIT})
+        assert (caught.value.reason, caught.value.field) == ("integer_not_serializable", "a")
+        with pytest.raises(LedgerEncodeError):
+            canonical_json({"a": [10 ** _INT_LIMIT]})
+
+    def test_a_failed_encode_leaves_the_payload_untouched(self):
+        payload = self._accepted(10 ** _INT_LIMIT)
+        before = dataclasses.asdict(payload)
+        with pytest.raises(LedgerEncodeError):
+            encode_payload(payload)
+        assert dataclasses.asdict(payload) == before
+
+    def test_decode_rejects_an_unserializable_integer_as_corruption(self):
+        doc = _doc("accepted")
+        doc["server_time_ms"] = 10 ** _INT_LIMIT
+        error = _decode_error("OrderAcceptedByExchange", doc)
+        assert (error.reason, error.field) == ("invalid_field_type", "server_time_ms")
+        assert isinstance(error, LedgerIntegrityError) and not isinstance(error, LedgerEncodeError)
+
+    def test_decode_accepts_the_largest_serializable_integer(self):
+        doc = _doc("accepted")
+        doc["server_time_ms"] = 10 ** (_INT_LIMIT - 1)
+        assert _decode("OrderAcceptedByExchange", doc).server_time_ms == 10 ** (_INT_LIMIT - 1)
+
+    def test_textual_documents_with_oversized_integers_are_malformed(self):
+        text = '{"a":' + "9" * (_INT_LIMIT + 1) + "}"
+        with pytest.raises(LedgerDecodeError) as caught:
+            parse_document_strict(text)
+        assert caught.value.reason == "malformed_document"
+        assert parse_document_strict('{"a":' + "9" * _INT_LIMIT + "}")["a"] == int("9" * _INT_LIMIT)
+
+    def test_the_global_interpreter_limit_is_never_changed(self):
+        try:
+            encode_payload(self._accepted(10 ** _INT_LIMIT))
+        except LedgerEncodeError:
+            pass
+        assert sys.get_int_max_str_digits() == _INT_LIMIT
+
+    def test_no_silent_value_change_never_truncates_rounds_or_converts_to_float(self):
+        tree = ast.parse(inspect.getsource(_codec))
+        names = {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)}
+        assert "float" not in names and "set_int_max_str_digits" not in {
+            n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute)}

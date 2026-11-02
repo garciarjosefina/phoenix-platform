@@ -31,6 +31,27 @@ from execution_gateway.execution_ledger_persistence_errors import LedgerAppendEr
 #
 # Hay exactamente SIETE tipos concretos de payload (errata de ADR-017 D6, que
 # dice "8"): se enumeran explícitamente abajo, sin resolución dinámica.
+#
+# Enteros extremos: un entero cuyo texto decimal supera el límite del propio
+# intérprete (`sys.get_int_max_str_digits()`, 4300 dígitos por defecto) no es
+# serializable a JSON (`str()`/`json.dumps` levantan `ValueError`). No se
+# inventa un límite del contrato ni se altera el límite global: al codificar
+# (y en `canonical_json`) se rechaza con `LedgerEncodeError`
+# (`integer_not_serializable`); al decodificar un valor así es corrupción
+# (`invalid_field_type`) y `parse_document_strict` ya lo trata como
+# `malformed_document`. El corte depende de la configuración del intérprete
+# (`PYTHONINTMAXSTRDIGITS`): todos los procesos de Phoenix deben compartirla.
+#
+# Limitaciones conocidas y aceptadas (auditoría 3.99):
+# - `EncodedLedgerPayload` construido A MANO sólo valida tipos y la
+#   coincidencia de `execution_order_id`; NO garantiza que el documento
+#   decodifique. Quien persista debe usar únicamente `encode_payload`.
+# - Los mensajes de `LedgerDecodeError` pueden incluir el NOMBRE de una clave
+#   externa inesperada (`unexpected_field`), nunca su valor.
+# - `EncodedLedgerPayload` tiene igualdad por valor pero no es hashable (su
+#   documento es un `Mapping`); no usarlo como clave de dict ni en sets.
+# - `_REGISTRY` es un `dict` privado y mutable a nivel de módulo: nada debe
+#   modificarlo; la lectura pública es `LEDGER_EVENT_TYPES` y `event_type_for`.
 
 _SCHEMA_VERSION = 1
 
@@ -47,7 +68,7 @@ _DECODE_REASONS = frozenset({
     "invariant_violation",
     "malformed_document",
 })
-_ENCODE_REASONS = frozenset({"nul_character", "invalid_unicode"})
+_ENCODE_REASONS = frozenset({"nul_character", "invalid_unicode", "integer_not_serializable"})
 
 # Clases de campo -> cómo se codifican/decodifican.
 _STR, _INT, _BOOL, _DECIMAL, _ORDER_ID, _BOT_ID = "str", "int", "bool", "decimal", "order_id", "bot_id"
@@ -120,6 +141,26 @@ _REGISTRY: dict[str, tuple[type, tuple[tuple[str, str, bool], ...]]] = {
 }
 # Tipo EXACTO -> nombre. Una subclase o un marcador no están registrados.
 _NAME_BY_CLASS: dict[type, str] = {cls: name for name, (cls, _) in _REGISTRY.items()}
+
+# Los siete nombres de `event_type`, derivados del MISMO registro explícito
+# (orden del registro). Es una referencia de lectura: la migración 0001 debe
+# llevar su propio conjunto explícito y versionado, comprobado contra esta
+# tupla por un test de correspondencia; nunca se genera desde el registro.
+LEDGER_EVENT_TYPES: tuple[str, ...] = tuple(_REGISTRY)
+
+
+def event_type_for(payload_type) -> str:
+    """Nombre de `event_type` de una CLASE de payload registrada. Acepta
+    únicamente las siete clases exactas: rechaza (`TypeError`) marcadores,
+    subclases, clases impostoras con el mismo nombre, instancias y cualquier
+    valor que no sea una clase. El nombre NO autoriza nada: la decisión es por
+    identidad de clase contra el registro."""
+    if not isinstance(payload_type, type):
+        raise TypeError(f"payload_type must be a class, got: {type(payload_type).__name__}")
+    name = _NAME_BY_CLASS.get(payload_type)
+    if name is None:
+        raise TypeError(f"payload_type is not a registered ledger payload class: {payload_type.__name__}")
+    return name
 
 
 class LedgerDecodeError(LedgerIntegrityError):
@@ -211,6 +252,14 @@ def _check_text_encodable(value: str, *, field: str) -> None:
         raise LedgerEncodeError(reason="invalid_unicode", field=field) from error
 
 
+def _int_is_serializable(value: int) -> bool:
+    try:
+        str(value)
+    except ValueError:
+        return False
+    return True
+
+
 def _text_is_storable(value: str) -> bool:
     if "\x00" in value:
         return False
@@ -238,6 +287,8 @@ def _encode_value(value, kind: str, optional: bool, *, field: str):
     if kind == _INT:
         if type(value) is not int:
             raise TypeError(f"{field} must be int, got: {type(value).__name__}")
+        if not _int_is_serializable(value):
+            raise LedgerEncodeError(reason="integer_not_serializable", field=field)
         return value
     if kind == _BOOL:
         if type(value) is not bool:
@@ -303,7 +354,7 @@ def _decode_value(value, kind: str, optional: bool, *, field: str):
             raise LedgerDecodeError(reason="invalid_field_type", field=field)
         return value
     if kind == _INT:
-        if type(value) is not int:
+        if type(value) is not int or not _int_is_serializable(value):
             raise LedgerDecodeError(reason="invalid_field_type", field=field)
         return value
     if kind == _BOOL:
@@ -422,6 +473,8 @@ def decode_stored_event(
 # ---------------------------------------------------------------------------
 
 def _plain(value, *, field: str):
+    if type(value) is int and not _int_is_serializable(value):
+        raise LedgerEncodeError(reason="integer_not_serializable", field=field)
     if value is None or type(value) in (bool, int):
         return value
     if type(value) is str:
@@ -502,11 +555,13 @@ def parse_document_strict(text: str) -> dict:
 
 __all__ = [
     "EncodedLedgerPayload",
+    "LEDGER_EVENT_TYPES",
     "LedgerDecodeError",
     "LedgerEncodeError",
     "canonical_json",
     "decode_payload",
     "decode_stored_event",
     "encode_payload",
+    "event_type_for",
     "parse_document_strict",
 ]

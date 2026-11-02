@@ -305,12 +305,14 @@ from execution_gateway.execution_account_lease_contracts import (
 from execution_gateway.execution_account_lock_key import account_lock_key
 from execution_gateway.execution_ledger_event_codec import (
     EncodedLedgerPayload,
+    LEDGER_EVENT_TYPES,
     LedgerDecodeError,
     LedgerEncodeError,
     canonical_json,
     decode_payload,
     decode_stored_event,
     encode_payload,
+    event_type_for,
     parse_document_strict,
 )
 
@@ -541,4 +543,6 @@ __all__ = [
     "decode_stored_event",
     "encode_payload",
     "parse_document_strict",
+    "LEDGER_EVENT_TYPES",
+    "event_type_for",
 ]
