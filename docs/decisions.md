@@ -1949,3 +1949,14 @@ Nada: ni dependencias, ni SQL, ni Writer/Reader/Lease, ni migraciones, ni tests.
 
 **Consecuencia para la migración 0001 (nodo [g0]):** el `CHECK` de `event_type` debe listar exactamente estos siete nombres. La fuente única de verdad del conjunto es el registro explícito del codec (`execution_ledger_event_codec`, 3.99): un test lo compara con la enumeración mecánica de las dataclasses, y ampliarlo (p. ej. con el evento de OQ1) exige una migración hacia adelante que amplíe el `CHECK`. Los siete tipos portan `execution_order_id` (NOT NULL en la práctica); la nulabilidad de la columna sigue reservada a futuros eventos no order-scoped.
 
+
+---
+
+## ACLARACIÓN a la errata de ADR-017 (Hito 3.99, tras la auditoría adversarial)
+
+**Fecha:** 2026-11-01
+**Contexto:** la auditoría independiente de 3.99 (`CORREGIR HITO 3.99`) halló que la errata anterior llamaba al registro del codec «fuente única de verdad» del conjunto de `event_type` sin que existiera acceso público a él. Append-only: no se reescribe la errata ni ninguna ADR.
+
+**Precisión (reemplaza la lectura de la errata sobre quién es la fuente):** el codec expone el registro de forma pública y de sólo lectura — `LEDGER_EVENT_TYPES` (tupla inmutable de los siete nombres) y `event_type_for(clase)` (traduce una de las siete clases exactas a su `event_type`; rechaza con `TypeError` marcadores, subclases, impostores del mismo nombre, instancias y cualquier no-clase) — ambos derivados del MISMO registro explícito. Eso es una **referencia para verificar**, no un generador: la **migración 0001 ([g0]) deberá contener su propio conjunto de nombres explícito y versionado en el `CHECK` de `event_type`**, con un test de correspondencia contra `LEDGER_EVENT_TYPES`; **no se genera automáticamente desde el registro** (una migración aplicada es historia inmutable y no puede cambiar si cambia el código). Ampliar el conjunto (p. ej. el evento de OQ1) exige una migración hacia adelante que amplíe el `CHECK` y el registro, y el test de correspondencia lo hará fallar hasta que ambos coincidan.
+
+**Enteros extremos (no es un límite nuevo del contrato):** un entero cuyo texto decimal excede el límite del propio intérprete (`sys.get_int_max_str_digits()`, 4300 dígitos por defecto) no es serializable a JSON. Se rechaza al codificar con `LedgerEncodeError(reason="integer_not_serializable")` (también en `canonical_json`), es corrupción al decodificar (`LedgerDecodeError`, `invalid_field_type`) y `parse_document_strict` ya lo trata como `malformed_document`. No se trunca, redondea ni convierte a `float`, y no se modifica el límite global. El corte depende de la configuración del intérprete: todos los procesos de Phoenix deben compartirla (`PYTHONINTMAXSTRDIGITS`).
