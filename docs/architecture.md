@@ -961,9 +961,9 @@ Pure domain contracts for the Execution Ledger persistence boundary, derived fro
 
 **Hito 3.98 is now ACCEPTED — the last accepted code hito.** Hito 3.96 remains accepted and frozen; ADR-017 is intact; OQ1 remains open and OQ2 remains resolved. **Next: Hito 3.99 [c2] — the Execution Ledger event codec** (typed envelope + JSONB payload, `Decimal` as an exact string, `float` forbidden, corruption detection), with no PostgreSQL, `psycopg`, SQL or migrations.
 
-## 32. Execution Ledger event codec (Hito 3.99 — node [c2], IMPLEMENTED, pending independent adversarial audit)
+## 32. Execution Ledger event codec (Hito 3.99 — node [c2], ACCEPTED)
 
-A pure, deterministic and reversible codec between the Ledger payload dataclasses and the persisted representation of ADR-017 D6/D7. Hito 3.98 is the last accepted code hito; OQ1 is open and OQ2 is resolved. No PostgreSQL, `psycopg`, SQL or migration exists.
+A pure, deterministic and reversible codec between the Ledger payload dataclasses and the persisted representation of ADR-017 D6/D7. At the time of writing Hito 3.98 was the last accepted code hito; 3.99 has since been ACCEPTED (see «Acceptance» at the end of this section). OQ1 is open and OQ2 is resolved. No PostgreSQL, `psycopg`, SQL or migration exists.
 
 **Seven payload types, not eight.** The registry is an explicit table of the seven concrete dataclasses (`OrderSubmissionAttempted`, `OrderSubmissionOutcomeUnknown`, `OrderAcceptedByExchange`, `OrderRejectedByExchange`, `OrderIdentityReportedDuplicateByExchange`, `OrderObservedOpen`, `OrderObservedClosed`). It resolves classes by exact type, never dynamically. A test compares the registry with the mechanical enumeration of the ledger module. The "8" in ADR-017 D6 is corrected by an append-only erratum in `decisions.md`; ADR-017 itself is untouched.
 
@@ -1001,4 +1001,16 @@ A pure, deterministic and reversible codec between the Ledger payload dataclasse
 - **Documented limitations (minors 3–6), no API change.** A hand-built `EncodedLedgerPayload` validates only types and the order id, so persistence must use `encode_payload`. Error messages may name an unexpected external key (never its value). The carrier is equal-by-value but not hashable. `_REGISTRY` is a private mutable dict that nothing may modify.
 - **Evidence.** Codec tests 780 → 1051; suite 8771 → 9042. The 22 re-run mutants (the six requested E03, E04, T04, D05, D06, D07, plus new-API and integer mutants and P04): 22 causal kills, 0 survivors, 0 collection errors. The targeted subset was the codec and purity test files only (the full suite stayed green separately).
 
-Hito 3.99 remains pending independent acceptance; 3.98 is still the last accepted code hito.
+At that point Hito 3.99 was pending independent acceptance; it has since been accepted (below).
+
+**Acceptance (final independent re-audit: `ACEPTAR HITO 3.99` — 0 blocking, 0 important, 5 minor; audited HEAD `37c78f8cdc3ab8f795eaea845e58495cae4c6567`, chain `076cfc7 → 53a3292 → 37c78f8`, suite 9042).** Confirmed: the seven real types; the public registry API (`LEDGER_EVENT_TYPES`, `event_type_for`) usable by a future Writer/Reader without private names; literal preservation checked on 32 Unicode literals (NFC and NFD stay distinct; no `strip`, `lower` or `casefold`); the offending `field` on decode errors; and extreme integers probed in isolated processes with `PYTHONINTMAXSTRDIGITS` 640, 4300, 20000 and 0, classified as acceptable and documentable (the interpreter's own limit is surfaced as a typed error; no new contract limit is imposed). The auditor's own 31 mutants gave 25 causal kills, 3 structural-only and 3 equivalent or weak survivors, with no collection errors; the six requested mutants (E03, E04, T04, D05, D06, D07) die causally.
+
+**Minor findings, with traceability.**
+- *Hardening debt (M1–M4; no production or test change in this closure):*
+  - **M1.** `event_type_for` and `encode_payload` look the class up in a `dict` (hash and equality), not by exact identity. A metaclass that spoofs `__hash__` and `__eq__` is accepted as the registered class. This needs deliberate in-process spoofing and has no production path. Planned fix: compare with `is` and correct the "by class identity" docstring.
+  - **M2.** There is no behavioural test of an `execution_bot_id` with padding; mutant L05 (`strip` on encode) is caught only by the AST test.
+  - **M3.** The integer tests use the live interpreter limit. A subprocess test with an alternative `PYTHONINTMAXSTRDIGITS` is missing, to prove the limit is not hard-coded (mutant G01).
+  - **M4.** The multiple-extra-fields test is non-deterministic under mutant F04, because it depends on hash ordering.
+- *Requirement for the 4.00 preflight (M5):* it must check `sys.get_int_max_str_digits()` against the expected value. A producer with limit 0 can emit a 5000-digit integer that a default-limit consumer rejects as `malformed_document`. The real JSONB `numeric` limit must also be checked.
+
+Real JSONB compatibility (U+0000, large integers, key re-ordering, true round-trip) remains for 4.00. **Hito 3.99 is now ACCEPTED — the last accepted code hito.** Hito 3.98 remains accepted and frozen; ADR-017 and its append-only erratum and clarification are intact; OQ1 remains open and OQ2 resolved. **Next: Hito 4.00 [g0]** — the first dependency (`psycopg[binary]`), integration-test infrastructure on `PHOENIX_TEST_DATABASE_URL` with `PHOENIX_REQUIRE_POSTGRES=1`, the local-provider acceptance gate, the migration runner, migration 0001 (its `event_type` `CHECK` an explicit versioned set of the seven names, with a correspondence test against `LEDGER_EVENT_TYPES`) and the preflight.
